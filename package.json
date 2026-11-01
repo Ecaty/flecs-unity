@@ -1,0 +1,11 @@
+{
+  "name": "com.ecaty.flecs-unity",
+  "version": "0.1.0",
+  "displayName": "Ecaty Flecs Unity",
+  "description": "Native Flecs lifecycle, Script import and Unity presentation adapters.",
+  "unity": "6000.4",
+  "author": {
+    "name": "Ecaty",
+    "url": "https://github.com/Ecaty"
+  }
+}
