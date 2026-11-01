@@ -1,6 +1,6 @@
 {
   "name": "com.ecaty.flecs-unity",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "displayName": "Ecaty Flecs Unity",
   "description": "Native Flecs lifecycle, Script import and Unity presentation adapters.",
   "unity": "6000.4",

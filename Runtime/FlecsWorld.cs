@@ -80,7 +80,7 @@ namespace Ecaty.Flecs
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
                 {
-                    DestroyObject(view.Mesh);
+                    DestroyOwnedObject(view.Mesh);
                     view.Mesh = null; view.Renderer = null; view.Kind = v.Primitive;
                     if (v.Primitive >= 0 && v.Primitive <= 5)
                     {
@@ -90,7 +90,7 @@ namespace Ecaty.Flecs
                         view.Mesh.name = "Visual";
                         view.Mesh.transform.SetParent(view.Root.transform, false);
                         // This hello world is presentation only: no hidden second physics model.
-                        DestroyObject(view.Mesh.GetComponent<Collider>());
+                        DestroyOwnedObject(view.Mesh.GetComponent<Collider>());
                         view.Renderer = view.Mesh.GetComponent<Renderer>();
                         EnsureMaterial();
                         view.Renderer.sharedMaterial = material;
@@ -122,7 +122,7 @@ namespace Ecaty.Flecs
                     view.Text.text = Session.Label(v.Entity);
                     view.Text.color = color;
                 }
-                else if (view.Text) { DestroyObject(view.Text.gameObject); view.Text = null; }
+                else if (view.Text) { DestroyOwnedObject(view.Text.gameObject); view.Text = null; }
             }
             // Read actual object properties after application, into a separate observation component.
             if (acknowledgements.Length < count) acknowledgements = new FlecsSession.View[Math.Max(count, acknowledgements.Length * 2)];
@@ -141,7 +141,7 @@ namespace Ecaty.Flecs
             Session.WritePresented(acknowledgements, count, ++appliedFrame);
             removed.Clear();
             foreach (var pair in objects) if (!seen.Contains(pair.Key)) removed.Add(pair.Key);
-            foreach (var id in removed) { DestroyObject(objects[id].Root); objects.Remove(id); }
+            foreach (var id in removed) { DestroyOwnedObject(objects[id].Root); objects.Remove(id); }
         }
         private void EnsureMaterial()
         {
@@ -159,13 +159,13 @@ namespace Ecaty.Flecs
             if (Session != null) { Session.Dispose(); Session = null; }
             // Destroy only top-level owned views; child destruction follows hierarchy.
             foreach (var view in objects.Values)
-                if (view.Root && view.Root.transform.parent == transform) DestroyObject(view.Root);
+                if (view.Root && view.Root.transform.parent == transform) DestroyOwnedObject(view.Root);
             objects.Clear();
-            DestroyObject(material); material = null; properties = null;
+            DestroyOwnedObject(material); material = null; properties = null;
         }
         private void OnDisable() => Shutdown();
         private void OnDestroy() => Shutdown();
-        private static void DestroyObject(UnityEngine.Object value)
+        private static void DestroyOwnedObject(UnityEngine.Object value)
         {
             if (!value) return;
             if (Application.isPlaying) Destroy(value); else DestroyImmediate(value);
