@@ -25,7 +25,7 @@ namespace Ecaty.Flecs
 
         public FlecsSession(ushort restPort = 27750)
         {
-            if (fu_abi_version() != 1 || fu_view_size() != Marshal.SizeOf<View>())
+            if (fu_abi_version() != 2 || fu_view_size() != Marshal.SizeOf<View>())
                 throw new InvalidOperationException("Native/managed ABI mismatch. Rebuild matching sources.");
             context = fu_create(restPort);
             if (context == IntPtr.Zero) throw new InvalidOperationException(Utf8(fu_last_error(IntPtr.Zero)));
@@ -64,6 +64,12 @@ namespace Ecaty.Flecs
             }
             views = buffer;
             return count;
+        }
+        public void WritePresented(View[] views, int count, int frame)
+        {
+            Check();
+            if (views == null || count < 0 || count > views.Length) throw new ArgumentOutOfRangeException(nameof(count));
+            if (fu_write_presented(context, views, count, frame) != 0) throw new InvalidOperationException("Presentation acknowledgement failed.");
         }
         public void Dispose()
         {
@@ -111,6 +117,7 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_set_managed_script(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_last_error(IntPtr ctx);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_read_views(IntPtr ctx, [Out] View[] views, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_write_presented(IntPtr ctx, [In] View[] views, int count, int frame);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_entity_name(IntPtr ctx, ulong entity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_label(IntPtr ctx, ulong entity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);

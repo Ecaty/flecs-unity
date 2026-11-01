@@ -17,6 +17,8 @@ namespace Ecaty.Flecs
         private readonly Dictionary<ulong, PresentedEntity> objects = new Dictionary<ulong, PresentedEntity>();
         private readonly HashSet<ulong> seen = new HashSet<ulong>();
         private readonly List<ulong> removed = new List<ulong>();
+        private FlecsSession.View[] acknowledgements = new FlecsSession.View[32];
+        private int appliedFrame;
         private Material material;
         private MaterialPropertyBlock properties;
         private sealed class PresentedEntity
@@ -122,6 +124,21 @@ namespace Ecaty.Flecs
                 }
                 else if (view.Text) { DestroyObject(view.Text.gameObject); view.Text = null; }
             }
+            // Read actual object properties after application, into a separate observation component.
+            if (acknowledgements.Length < count) acknowledgements = new FlecsSession.View[Math.Max(count, acknowledgements.Length * 2)];
+            for (int i = 0; i < count; i++)
+            {
+                var source = views[i]; var view = objects[source.Entity]; var t = view.Root.transform;
+                var position = t.localPosition; var rotation = t.localEulerAngles; var scale = t.localScale;
+                Color color = Color.white;
+                if (view.Renderer) { view.Renderer.GetPropertyBlock(properties); color = properties.GetColor("_BaseColor"); }
+                else if (view.Text) color = view.Text.color;
+                acknowledgements[i] = new FlecsSession.View { Entity = source.Entity, Parent = source.Parent,
+                    Px = position.x, Py = position.y, Pz = position.z, Rx = rotation.x, Ry = rotation.y, Rz = rotation.z,
+                    Sx = scale.x, Sy = scale.y, Sz = scale.z, R = color.r, G = color.g, B = color.b, A = color.a,
+                    Primitive = view.Renderer ? view.Kind : -1, HasLabel = view.Text ? 1 : 0 };
+            }
+            Session.WritePresented(acknowledgements, count, ++appliedFrame);
             removed.Clear();
             foreach (var pair in objects) if (!seen.Contains(pair.Key)) removed.Add(pair.Key);
             foreach (var id in removed) { DestroyObject(objects[id].Root); objects.Remove(id); }
