@@ -1,0 +1,47 @@
+struct CapBinding(target: entity, enabled: bool, revision: i32)
+struct CapState(phase: i32, appliedRevision: i32, generation: i32, message: string)
+struct CapType(component: string, category: string, description: string)
+struct CapReadback(x: f32, y: f32, z: f32, vx: f32, vy: f32, vz: f32, contacts: i32)
+CapDependsOn {}
+CapDirty {}
+struct CapBody(mass: f32, radius: f32, height: f32, gravity: f32, kinematic: bool)
+struct CapForce(x: f32, y: f32, z: f32, sequence: i32)
+struct CapDrag(x: f32, y: f32, z: f32, active: bool)
+struct CapMaterial(colorR: f32, colorG: f32, colorB: f32, metallic: f32, smoothness: f32, material: string)
+struct CapParticles(rate: f32, lifetime: f32, speed: f32, size: f32, colorR: f32, colorG: f32, colorB: f32)
+struct CapLight(kind: i32, intensity: f32, range: f32, colorR: f32, colorG: f32, colorB: f32)
+struct CapAudio(program: i32, note: i32, gain: f32, spatial: f32, pitch: f32, lowPass: f32, trigger: i32, synthesis: i32)
+struct CapAudioNote(note: i32, velocity: f32, delay: f32, duration: f32, sequence: i32)
+struct CapAudioMeter(peak: f32, samples: u64)
+struct CapNavigation(command: entity, x: f32, y: f32, z: f32, speed: f32, stopping: f32)
+struct CapCamera(distance: f32, height: f32, priority: i32)
+struct CapTimeline(duration: f32, playing: bool, time: f32, audio: string)
+struct CapRig(root: entity, mid: entity, tip: entity, goal: entity, weight: f32)
+struct CapRigResult(x: f32, y: f32, z: f32, error: f32)
+struct CapVfx(asset: string, rate: f32, event: string, trigger: i32)
+struct CapSpline(points: string, width: f32, profile: string, closed: bool, fill: bool)
+struct CapTerrain(source: entity, points: string, size: f32, resolution: i32, height: f32, falloff: f32)
+struct CapBuilding(prefab: string, points: string)
+struct CapVegetation(pipeline: string, seed: i32)
+struct CapLayout(radius: f32, spacing: f32)
+struct CapFeedback(prefab: string, trigger: i32)
+struct CapWeather(hour: i32, minute: i32, cloud: i32, weather: string)
+struct CapWater(level: f32, density: f32)
+struct CapBuoyancy(volume: entity, displacement: f32, drag: f32)
+struct CapHandle(radius: f32, grid: f32, enabled: bool, edit: entity, component: string, index: i32)
+struct CapSequence(pattern: string, bpm: f32, playing: bool)
+
+struct CapNavSurface(radius: f32, height: f32, rebuild: i32)
+struct CapPath(x: f32, y: f32, z: f32, status: i32)
+
+struct CapOcean(prefab: string, level: f32)
+
+struct CapBounds(minX: f32, minY: f32, minZ: f32, maxX: f32, maxY: f32, maxZ: f32)
+
+struct CapAsset(key: string, type: string)
+struct NativeTreeNode(ports: string, description: string)
+NativeTreeNodes {
+    FlecsSet { NativeTreeNode: {"entity:string;component:string;value:JSON", "Set a reflected ECS component on the simulation thread"} }
+    FlecsQuery { NativeTreeNode: {"expression:string", "Success when a current ECS query matches"} }
+    SimWait { NativeTreeNode: {"seconds:number", "Nonblocking simulation-time wait; cancellation halts the task"} }
+}

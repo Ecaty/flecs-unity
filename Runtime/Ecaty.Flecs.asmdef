@@ -1,6 +1,17 @@
 {
   "name": "Ecaty.Flecs",
   "rootNamespace": "Ecaty.Flecs",
-  "references": [],
-  "autoReferenced": true
+  "references": [
+    "Unity.Newtonsoft.Json",
+    "Unity.InputSystem",
+    "Unity.AI.Navigation",
+    "Unity.Cinemachine",
+    "Unity.Timeline",
+    "Unity.Animation.Rigging",
+    "Unity.VisualEffectGraph.Runtime",
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "autoReferenced": true,
+  "allowUnsafeCode": true
 }

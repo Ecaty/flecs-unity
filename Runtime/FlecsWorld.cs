@@ -13,6 +13,12 @@ namespace Ecaty.Flecs
         public Material presentationMaterial;
         public FlecsSession Session { get; private set; }
         public int ViewCount => objects.Count;
+        readonly Dictionary<ulong,object> poseOwners = new();
+        readonly Dictionary<ulong,object> appearanceOwners = new();
+        public bool AcquireAppearance(ulong id,object owner){if(appearanceOwners.TryGetValue(id,out var current)&&!ReferenceEquals(current,owner))return false;appearanceOwners[id]=owner;return true;}
+        public void ReleaseAppearance(ulong id,object owner){if(appearanceOwners.TryGetValue(id,out var current)&&ReferenceEquals(current,owner))appearanceOwners.Remove(id);}
+        public bool AcquirePose(ulong id, object owner) { if(poseOwners.TryGetValue(id,out var current)&&!ReferenceEquals(current,owner))return false;poseOwners[id]=owner;return true; }
+        public void ReleasePose(ulong id, object owner) { if(poseOwners.TryGetValue(id,out var current)&&ReferenceEquals(current,owner))poseOwners.Remove(id); }
         public string Error { get; private set; }
         private readonly Dictionary<ulong, PresentedEntity> objects = new Dictionary<ulong, PresentedEntity>();
         private readonly HashSet<ulong> seen = new HashSet<ulong>();
@@ -75,8 +81,10 @@ namespace Ecaty.Flecs
                 Transform parent = v.Parent != 0 && seen.Contains(v.Parent) && objects.TryGetValue(v.Parent, out var p)
                     ? p.Root.transform : transform;
                 if (view.Root.transform.parent != parent) view.Root.transform.SetParent(parent, false);
-                view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
-                view.Root.transform.localRotation = Quaternion.Euler(v.Rx, v.Ry, v.Rz);
+                if (!poseOwners.ContainsKey(v.Entity)) {
+                    view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
+                    view.Root.transform.localRotation = Quaternion.Euler(v.Rx, v.Ry, v.Rz);
+                }
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
                 {
@@ -97,7 +105,7 @@ namespace Ecaty.Flecs
                     }
                 }
                 var color = new Color(v.R, v.G, v.B, v.A);
-                if (view.Renderer)
+                if (view.Renderer && !appearanceOwners.ContainsKey(v.Entity))
                 {
                     properties.Clear();
                     properties.SetColor("_Color", color);
@@ -156,6 +164,7 @@ namespace Ecaty.Flecs
         public GameObject FindView(ulong entity) => objects.TryGetValue(entity, out var value) ? value.Root : null;
         public void Shutdown()
         {
+            poseOwners.Clear(); appearanceOwners.Clear();
             if (Session != null) { Session.Dispose(); Session = null; }
             // Destroy only top-level owned views; child destruction follows hierarchy.
             foreach (var view in objects.Values)

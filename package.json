@@ -3,9 +3,19 @@
   "version": "0.2.1",
   "displayName": "Ecaty Flecs Unity",
   "description": "Native Flecs lifecycle, Script import and Unity presentation adapters.",
-  "unity": "6000.4",
+  "unity": "6000.6",
   "author": {
     "name": "Ecaty",
     "url": "https://github.com/Ecaty"
+  },
+  "dependencies": {
+    "com.unity.ai.navigation": "2.0.16",
+    "com.unity.animation.rigging": "6.6.0",
+    "com.unity.cinemachine": "6.6.0",
+    "com.unity.inputsystem": "1.20.1",
+    "com.unity.render-pipelines.universal": "17.6.0",
+    "com.unity.timeline": "6.6.0",
+    "com.unity.visualeffectgraph": "17.6.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.2"
   }
 }
