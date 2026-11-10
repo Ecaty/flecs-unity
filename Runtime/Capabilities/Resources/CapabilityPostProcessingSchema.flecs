@@ -1,1 +1,0 @@
-struct CapPostProcessing(exposure: f32, contrast: f32, saturation: f32, temperature: f32, bloom: f32, threshold: f32, vignette: f32, tonemap: i32)
