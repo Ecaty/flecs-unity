@@ -7,7 +7,14 @@ namespace Ecaty.Flecs
     [DisallowMultipleComponent]
     public sealed class FlecsWorld : MonoBehaviour
     {
+        [Tooltip("Local Flecs REST/Explorer port (127.0.0.1). Editor and development builds only; release players never open it.")]
         public int restPort = 27750;
+        // REST is unauthenticated and read-write, so release players never start it (docs/FLECS-ARCHITECTURE-AUDIT.md).
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public ushort EffectiveRestPort => (ushort)restPort;
+#else
+        public ushort EffectiveRestPort => 0;
+#endif
         public TextAsset initialScript;
         public string scriptEntity = "World";
         public Material presentationMaterial;
@@ -38,7 +45,7 @@ namespace Ecaty.Flecs
         private void OnEnable()
         {
             if (!Application.isPlaying) return;
-            try { Initialize((ushort)restPort, initialScript, scriptEntity); }
+            try { Initialize(EffectiveRestPort, initialScript, scriptEntity); }
             catch (Exception ex) { Error = ex.Message; Debug.LogException(ex, this); enabled = false; }
         }
         public void Initialize(ushort port, TextAsset source = null, string path = "World")
