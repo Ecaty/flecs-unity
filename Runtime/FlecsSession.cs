@@ -234,6 +234,12 @@ namespace Ecaty.Flecs
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             return rc == 1;
         }
+        /// <summary>JSON rows of a stable query handle (also resets its change state).</summary>
+        public string QueryJson(int handle)
+        {
+            Check();
+            return Take(fu_query_json_h(context, handle), true);
+        }
         public unsafe int ReadQuery<T>(string expression, string variable, ref ulong[] entities, ref ulong[] targets, ref T[] values) where T : unmanaged
         {
             Check();
@@ -434,6 +440,7 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_rest_status(IntPtr ctx);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_changed(IntPtr ctx, int handle);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_json_h(IntPtr ctx, int handle);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_query_read_data(IntPtr ctx, int handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_component_json_into(IntPtr ctx, ulong entity, ulong type, byte* output, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
