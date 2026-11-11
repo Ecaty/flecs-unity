@@ -18,15 +18,41 @@ namespace Ecaty.Flecs
         public TextAsset initialScript;
         public string scriptEntity = "World";
         public Material presentationMaterial;
-        public FlecsSession Session { get; private set; }
+        public FlecsSession Session
+        {
+            get; private set;
+        }
         public int ViewCount => objects.Count;
-        readonly Dictionary<ulong,object> poseOwners = new();
-        readonly Dictionary<ulong,object> appearanceOwners = new();
-        public bool AcquireAppearance(ulong id,object owner){if(appearanceOwners.TryGetValue(id,out var current)&&!ReferenceEquals(current,owner))return false;appearanceOwners[id]=owner;return true;}
-        public void ReleaseAppearance(ulong id,object owner){if(appearanceOwners.TryGetValue(id,out var current)&&ReferenceEquals(current,owner))appearanceOwners.Remove(id);}
-        public bool AcquirePose(ulong id, object owner) { if(poseOwners.TryGetValue(id,out var current)&&!ReferenceEquals(current,owner))return false;poseOwners[id]=owner;return true; }
-        public void ReleasePose(ulong id, object owner) { if(poseOwners.TryGetValue(id,out var current)&&ReferenceEquals(current,owner))poseOwners.Remove(id); }
-        public string Error { get; private set; }
+        readonly Dictionary<ulong, object> poseOwners = new();
+        readonly Dictionary<ulong, object> appearanceOwners = new();
+        public bool AcquireAppearance(ulong id, object owner)
+        {
+            if (appearanceOwners.TryGetValue(id, out var current) && !ReferenceEquals(current, owner))
+                return false;
+            appearanceOwners[id] = owner;
+            return true;
+        }
+        public void ReleaseAppearance(ulong id, object owner)
+        {
+            if (appearanceOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
+                appearanceOwners.Remove(id);
+        }
+        public bool AcquirePose(ulong id, object owner)
+        {
+            if (poseOwners.TryGetValue(id, out var current) && !ReferenceEquals(current, owner))
+                return false;
+            poseOwners[id] = owner;
+            return true;
+        }
+        public void ReleasePose(ulong id, object owner)
+        {
+            if (poseOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
+                poseOwners.Remove(id);
+        }
+        public string Error
+        {
+            get; private set;
+        }
         private readonly Dictionary<ulong, PresentedEntity> objects = new Dictionary<ulong, PresentedEntity>();
         private readonly HashSet<ulong> seen = new HashSet<ulong>();
         private readonly List<ulong> removed = new List<ulong>();
@@ -44,8 +70,12 @@ namespace Ecaty.Flecs
 
         private void OnEnable()
         {
-            if (!Application.isPlaying) return;
-            try { Initialize(EffectiveRestPort, initialScript, scriptEntity); }
+            if (!Application.isPlaying)
+                return;
+            try
+            {
+                Initialize(EffectiveRestPort, initialScript, scriptEntity);
+            }
             catch (Exception ex) { Error = ex.Message; Debug.LogException(ex, this); enabled = false; }
         }
         public void Initialize(ushort port, TextAsset source = null, string path = "World")
@@ -53,18 +83,21 @@ namespace Ecaty.Flecs
             Shutdown();
             Error = null;
             Session = new FlecsSession(port);
-            if (source) Session.SetManagedScript(path, source.text);
+            if (source)
+                Session.SetManagedScript(path, source.text);
             SyncViews();
         }
         private void Update()
         {
-            if (Session == null || Session.IsDisposed) return;
+            if (Session == null || Session.IsDisposed)
+                return;
             Session.Tick(Mathf.Min(Time.unscaledDeltaTime, 0.1f));
             SyncViews();
         }
         public void SyncViews()
         {
-            if (Session == null || Session.IsDisposed) return;
+            if (Session == null || Session.IsDisposed)
+                return;
             int count = Session.ReadViews(out var views);
             seen.Clear();
             // First pass creates all parents before assigning hierarchy.
@@ -87,8 +120,10 @@ namespace Ecaty.Flecs
                 var view = objects[v.Entity];
                 Transform parent = v.Parent != 0 && seen.Contains(v.Parent) && objects.TryGetValue(v.Parent, out var p)
                     ? p.Root.transform : transform;
-                if (view.Root.transform.parent != parent) view.Root.transform.SetParent(parent, false);
-                if (!poseOwners.ContainsKey(v.Entity)) {
+                if (view.Root.transform.parent != parent)
+                    view.Root.transform.SetParent(parent, false);
+                if (!poseOwners.ContainsKey(v.Entity))
+                {
                     view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
                     view.Root.transform.localRotation = Quaternion.Euler(v.Rx, v.Ry, v.Rz);
                 }
@@ -96,7 +131,9 @@ namespace Ecaty.Flecs
                 if (view.Kind != v.Primitive)
                 {
                     DestroyOwnedObject(view.Mesh);
-                    view.Mesh = null; view.Renderer = null; view.Kind = v.Primitive;
+                    view.Mesh = null;
+                    view.Renderer = null;
+                    view.Kind = v.Primitive;
                     if (v.Primitive >= 0 && v.Primitive <= 5)
                     {
                         PrimitiveType[] kinds = { PrimitiveType.Cube, PrimitiveType.Sphere, PrimitiveType.Capsule,
@@ -137,33 +174,71 @@ namespace Ecaty.Flecs
                     view.Text.text = Session.Label(v.Entity);
                     view.Text.color = color;
                 }
-                else if (view.Text) { DestroyOwnedObject(view.Text.gameObject); view.Text = null; }
+                else if (view.Text)
+                {
+                    DestroyOwnedObject(view.Text.gameObject);
+                    view.Text = null;
+                }
             }
             // Read actual object properties after application, into a separate observation component.
-            if (acknowledgements.Length < count) acknowledgements = new FlecsSession.View[Math.Max(count, acknowledgements.Length * 2)];
+            if (acknowledgements.Length < count)
+                acknowledgements = new FlecsSession.View[Math.Max(count, acknowledgements.Length * 2)];
             for (int i = 0; i < count; i++)
             {
-                var source = views[i]; var view = objects[source.Entity]; var t = view.Root.transform;
-                var position = t.localPosition; var rotation = t.localEulerAngles; var scale = t.localScale;
+                var source = views[i];
+                var view = objects[source.Entity];
+                var t = view.Root.transform;
+                var position = t.localPosition;
+                var rotation = t.localEulerAngles;
+                var scale = t.localScale;
                 Color color = Color.white;
-                if (view.Renderer) { view.Renderer.GetPropertyBlock(properties); color = properties.GetColor("_BaseColor"); }
-                else if (view.Text) color = view.Text.color;
-                acknowledgements[i] = new FlecsSession.View { Entity = source.Entity, Parent = source.Parent,
-                    Px = position.x, Py = position.y, Pz = position.z, Rx = rotation.x, Ry = rotation.y, Rz = rotation.z,
-                    Sx = scale.x, Sy = scale.y, Sz = scale.z, R = color.r, G = color.g, B = color.b, A = color.a,
-                    Primitive = view.Renderer ? view.Kind : -1, HasLabel = view.Text ? 1 : 0 };
+                if (view.Renderer)
+                {
+                    view.Renderer.GetPropertyBlock(properties);
+                    color = properties.GetColor("_BaseColor");
+                }
+                else if (view.Text)
+                    color = view.Text.color;
+                acknowledgements[i] = new FlecsSession.View
+                {
+                    Entity = source.Entity,
+                    Parent = source.Parent,
+                    Px = position.x,
+                    Py = position.y,
+                    Pz = position.z,
+                    Rx = rotation.x,
+                    Ry = rotation.y,
+                    Rz = rotation.z,
+                    Sx = scale.x,
+                    Sy = scale.y,
+                    Sz = scale.z,
+                    R = color.r,
+                    G = color.g,
+                    B = color.b,
+                    A = color.a,
+                    Primitive = view.Renderer ? view.Kind : -1,
+                    HasLabel = view.Text ? 1 : 0
+                };
             }
             Session.WritePresented(acknowledgements, count, ++appliedFrame);
             removed.Clear();
-            foreach (var pair in objects) if (!seen.Contains(pair.Key)) removed.Add(pair.Key);
-            foreach (var id in removed) { DestroyOwnedObject(objects[id].Root); objects.Remove(id); }
+            foreach (var pair in objects)
+            if (!seen.Contains(pair.Key))
+                removed.Add(pair.Key);
+            foreach (var id in removed)
+            {
+                DestroyOwnedObject(objects[id].Root);
+                objects.Remove(id);
+            }
         }
         private void EnsureMaterial()
         {
-            if (material) return;
+            if (material)
+                return;
             var bundled = presentationMaterial;
             var shader = bundled ? bundled.shader : Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color") ?? Shader.Find("Standard");
-            if (!shader) throw new InvalidOperationException("No supported shader found.");
+            if (!shader)
+                throw new InvalidOperationException("No supported shader found.");
             material = bundled ? new Material(bundled) : new Material(shader);
             material.name = "Flecs shared material";
             properties = new MaterialPropertyBlock();
@@ -171,20 +246,32 @@ namespace Ecaty.Flecs
         public GameObject FindView(ulong entity) => objects.TryGetValue(entity, out var value) ? value.Root : null;
         public void Shutdown()
         {
-            poseOwners.Clear(); appearanceOwners.Clear();
-            if (Session != null) { Session.Dispose(); Session = null; }
+            poseOwners.Clear();
+            appearanceOwners.Clear();
+            if (Session != null)
+            {
+                Session.Dispose();
+                Session = null;
+            }
             // Destroy only top-level owned views; child destruction follows hierarchy.
             foreach (var view in objects.Values)
-                if (view.Root && view.Root.transform.parent == transform) DestroyOwnedObject(view.Root);
+                if (view.Root && view.Root.transform.parent == transform)
+                    DestroyOwnedObject(view.Root);
             objects.Clear();
-            DestroyOwnedObject(material); material = null; properties = null;
+            DestroyOwnedObject(material);
+            material = null;
+            properties = null;
         }
         private void OnDisable() => Shutdown();
         private void OnDestroy() => Shutdown();
         private static void DestroyOwnedObject(UnityEngine.Object value)
         {
-            if (!value) return;
-            if (Application.isPlaying) Destroy(value); else DestroyImmediate(value);
+            if (!value)
+                return;
+            if (Application.isPlaying)
+                Destroy(value);
+            else
+                DestroyImmediate(value);
         }
     }
 }
