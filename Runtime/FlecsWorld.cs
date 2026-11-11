@@ -9,6 +9,8 @@ namespace Ecaty.Flecs
     {
         [Tooltip("Local Flecs REST/Explorer port (127.0.0.1). Editor and development builds only; release players never open it.")]
         public int restPort = 27750;
+        [Tooltip("REST refuses requests that modify the world (inspection only).")]
+        public bool restReadOnly;
         // REST is unauthenticated and read-write, so release players never start it (docs/FLECS-ARCHITECTURE-AUDIT.md).
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public ushort EffectiveRestPort => (ushort)restPort;
@@ -60,12 +62,18 @@ namespace Ecaty.Flecs
         private int appliedFrame;
         private Material material;
         private MaterialPropertyBlock properties;
+        private static readonly int ColorId = Shader.PropertyToID("_Color"), BaseColorId = Shader.PropertyToID("_BaseColor");
+        private static readonly PrimitiveType[] PrimitiveKinds = { PrimitiveType.Cube, PrimitiveType.Sphere, PrimitiveType.Capsule,
+            PrimitiveType.Cylinder, PrimitiveType.Plane, PrimitiveType.Quad };
+        private byte[] labelBuffer = new byte[256];
         private sealed class PresentedEntity
         {
             public GameObject Root, Mesh;
             public Renderer Renderer;
             public TextMesh Text;
             public int Kind = int.MinValue;
+            public byte[] LabelBytes = Array.Empty<byte>();
+            public int LabelLength = -1;
         }
 
         private void OnEnable()
@@ -82,7 +90,9 @@ namespace Ecaty.Flecs
         {
             Shutdown();
             Error = null;
-            Session = new FlecsSession(port);
+            Session = new FlecsSession(port, restReadOnly);
+            if (Session.RestStatus < 0)
+                Debug.LogWarning(Session.RestError + " Flecs Explorer is unavailable for this world.", this);
             if (source)
                 Session.SetManagedScript(path, source.text);
             SyncViews();
@@ -107,11 +117,11 @@ namespace Ecaty.Flecs
                 seen.Add(v.Entity);
                 if (!objects.TryGetValue(v.Entity, out var view))
                 {
-                    view = new PresentedEntity { Root = new GameObject() };
+                    // Names are fetched once per new view; per-frame name strings were a steady GC source.
+                    view = new PresentedEntity { Root = new GameObject(Session.EntityName(v.Entity)) };
                     view.Root.transform.SetParent(transform, false);
                     objects.Add(v.Entity, view);
                 }
-                view.Root.name = Session.EntityName(v.Entity);
             }
             // Detach survivors before removing old parents; never destroy a surviving child.
             for (int i = 0; i < count; i++)
@@ -136,9 +146,7 @@ namespace Ecaty.Flecs
                     view.Kind = v.Primitive;
                     if (v.Primitive >= 0 && v.Primitive <= 5)
                     {
-                        PrimitiveType[] kinds = { PrimitiveType.Cube, PrimitiveType.Sphere, PrimitiveType.Capsule,
-                            PrimitiveType.Cylinder, PrimitiveType.Plane, PrimitiveType.Quad };
-                        view.Mesh = GameObject.CreatePrimitive(kinds[v.Primitive]);
+                        view.Mesh = GameObject.CreatePrimitive(PrimitiveKinds[v.Primitive]);
                         view.Mesh.name = "Visual";
                         view.Mesh.transform.SetParent(view.Root.transform, false);
                         // This hello world is presentation only: no hidden second physics model.
@@ -152,8 +160,8 @@ namespace Ecaty.Flecs
                 if (view.Renderer && !appearanceOwners.ContainsKey(v.Entity))
                 {
                     properties.Clear();
-                    properties.SetColor("_Color", color);
-                    properties.SetColor("_BaseColor", color);
+                    properties.SetColor(ColorId, color);
+                    properties.SetColor(BaseColorId, color);
                     view.Renderer.SetPropertyBlock(properties);
                 }
                 if (v.HasLabel != 0)
@@ -171,13 +179,14 @@ namespace Ecaty.Flecs
                         view.Text.font = font;
                         view.Text.GetComponent<MeshRenderer>().sharedMaterial = font.material;
                     }
-                    view.Text.text = Session.Label(v.Entity);
+                    UpdateLabel(view, v.Entity);
                     view.Text.color = color;
                 }
                 else if (view.Text)
                 {
                     DestroyOwnedObject(view.Text.gameObject);
                     view.Text = null;
+                    view.LabelLength = -1;
                 }
             }
             // Read actual object properties after application, into a separate observation component.
@@ -195,7 +204,7 @@ namespace Ecaty.Flecs
                 if (view.Renderer)
                 {
                     view.Renderer.GetPropertyBlock(properties);
-                    color = properties.GetColor("_BaseColor");
+                    color = properties.GetColor(BaseColorId);
                 }
                 else if (view.Text)
                     color = view.Text.color;
@@ -230,6 +239,26 @@ namespace Ecaty.Flecs
                 DestroyOwnedObject(objects[id].Root);
                 objects.Remove(id);
             }
+        }
+        // Compares the native label bytes with the last applied ones and builds a string only when the text changed.
+        private void UpdateLabel(PresentedEntity view, ulong entity)
+        {
+            int length = Session.LabelBytes(entity, ref labelBuffer);
+            if (length == view.LabelLength && length >= 0 && System.MemoryExtensions.SequenceEqual(
+                new ReadOnlySpan<byte>(labelBuffer, 0, length), new ReadOnlySpan<byte>(view.LabelBytes, 0, length)))
+                return;
+            if (length < 0)
+            {
+                if (view.LabelLength != -1 || view.Text.text != "")
+                    view.Text.text = "";
+                view.LabelLength = -1;
+                return;
+            }
+            if (view.LabelBytes.Length < length)
+                view.LabelBytes = new byte[length];
+            Buffer.BlockCopy(labelBuffer, 0, view.LabelBytes, 0, length);
+            view.LabelLength = length;
+            view.Text.text = System.Text.Encoding.UTF8.GetString(labelBuffer, 0, length);
         }
         private void EnsureMaterial()
         {

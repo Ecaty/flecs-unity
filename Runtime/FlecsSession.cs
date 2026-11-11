@@ -20,6 +20,8 @@ namespace Ecaty.Flecs
         private static readonly HashSet<FlecsSession> Sessions = new HashSet<FlecsSession>();
         private IntPtr context;
         private readonly Dictionary<string, ulong> typeIds = new Dictionary<string, ulong>();
+        private readonly Dictionary<string, int> queryHandles = new Dictionary<string, int>();
+        public const int AbiVersion = 3;
         private readonly List<string> managedPaths = new List<string>();
         public IReadOnlyList<string> ManagedPaths => managedPaths;
         public int SourceRevision
@@ -46,14 +48,28 @@ namespace Ecaty.Flecs
         public static string Version => Utf8(fu_version());
         public bool IsDisposed => context == IntPtr.Zero;
 
-        public FlecsSession(ushort restPort = 27750)
+        /// <param name="restPort">Local REST/Explorer port; 0 disables it. A busy port does not fail creation (see RestStatus).</param>
+        /// <param name="restReadOnly">REST refuses requests that modify the world.</param>
+        public FlecsSession(ushort restPort = 27750, bool restReadOnly = false)
         {
-            if (fu_abi_version() != 2 || fu_view_size() != Marshal.SizeOf<View>())
+            if (fu_abi_version() != AbiVersion || fu_view_size() != Marshal.SizeOf<View>())
                 throw new InvalidOperationException("Native/managed ABI mismatch. Rebuild matching sources.");
-            context = fu_create(restPort);
+            context = fu_create_ex(restPort, restReadOnly ? 1u : 0u);
             if (context == IntPtr.Zero)
                 throw new InvalidOperationException(Utf8(fu_last_error(IntPtr.Zero)));
             Sessions.Add(this);
+            RestStatus = fu_rest_status(context);
+            if (RestStatus < 0)
+                RestError = Utf8(fu_last_error(context));
+        }
+        /// <summary>1 REST running, 0 not requested, -1 could not start (RestError explains).</summary>
+        public int RestStatus
+        {
+            get;
+        }
+        public string RestError
+        {
+            get;
         }
 
         public void Tick(float seconds)
@@ -108,6 +124,50 @@ namespace Ecaty.Flecs
             Check();
             return Take(fu_label(context, id), false) ?? "";
         }
+        /// <summary>Copies the label's UTF-8 bytes into <paramref name="buffer"/> (grown as needed) without allocating a string.</summary>
+        /// <returns>Byte length, or -1 when the entity has no label.</returns>
+        public unsafe int LabelBytes(ulong id, ref byte[] buffer)
+        {
+            Check();
+            int length;
+            fixed (byte* data = buffer)
+                length = fu_label_into(context, id, data, buffer.Length);
+            if (length > buffer.Length)
+            {
+                buffer = new byte[Math.Max(length, buffer.Length * 2)];
+                fixed (byte* data = buffer)
+                    length = fu_label_into(context, id, data, buffer.Length);
+            }
+            return length;
+        }
+        /// <summary>Copies one component as JSON (UTF-8) into <paramref name="buffer"/> (grown as needed) without allocating.</summary>
+        /// <returns>Byte length, or -1 when the entity does not have the component.</returns>
+        public unsafe int ComponentJsonBytes(ulong entity, ulong type, ref byte[] buffer)
+        {
+            Check();
+            int length;
+            fixed (byte* data = buffer)
+                length = fu_component_json_into(context, entity, type, data, buffer.Length);
+            if (length > buffer.Length)
+            {
+                buffer = new byte[Math.Max(length, buffer.Length * 2)];
+                fixed (byte* data = buffer)
+                    length = fu_component_json_into(context, entity, type, data, buffer.Length);
+            }
+            return length;
+        }
+        /// <summary>Entity id of a named type, cached until sources change. 0 when unknown.</summary>
+        public ulong TypeId(string path)
+        {
+            Check();
+            if (!typeIds.TryGetValue(path, out ulong type))
+            {
+                type = Lookup(path);
+                if (type != 0)
+                    typeIds[path] = type;
+            }
+            return type;
+        }
         public int ReadViews(out View[] views)
         {
             Check();
@@ -153,13 +213,35 @@ namespace Ecaty.Flecs
             Check();
             return Take(fu_component_json(context, entity, type), false);
         }
+        /// <summary>Stable native query handle for an expression, created once per session and kept across source reloads.</summary>
+        public int QueryHandle(string expression)
+        {
+            Check();
+            if (queryHandles.TryGetValue(expression, out int handle))
+                return handle;
+            handle = fu_query_create(context, expression);
+            if (handle <= 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+            queryHandles.Add(expression, handle);
+            return handle;
+        }
+        /// <summary>True when data matched by the query changed since it was last read (new handle: true).</summary>
+        public bool QueryChanged(int handle)
+        {
+            Check();
+            int rc = fu_query_changed(context, handle);
+            if (rc < 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+            return rc == 1;
+        }
         public unsafe int ReadQuery<T>(string expression, string variable, ref ulong[] entities, ref ulong[] targets, ref T[] values) where T : unmanaged
         {
             Check();
+            int handle = QueryHandle(expression);
             int Read(ulong[] e, ulong[] t, T[] v)
             {
                 fixed (T* data = v)
-                    return fu_read_query_data(context, expression, variable, e, t, data, sizeof(T), v.Length);
+                    return fu_query_read_data(context, handle, variable, e, t, data, sizeof(T), v.Length);
             }
             int count = Read(entities, targets, values);
             if (count < 0)
@@ -243,13 +325,7 @@ namespace Ecaty.Flecs
         }
         private unsafe ulong DataType<T>(string path) where T : unmanaged
         {
-            Check();
-            if (!typeIds.TryGetValue(path, out ulong type))
-            {
-                type = Lookup(path);
-                if (type != 0)
-                    typeIds[path] = type;
-            }
+            ulong type = TypeId(path);
             if (type == 0 || fu_component_size(context, type) != sizeof(T))
                 throw new InvalidOperationException("Runtime component layout mismatch or non-POD type: " + path);
             return type;
@@ -323,7 +399,6 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_define_alert(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string query, [MarshalAs(UnmanagedType.LPUTF8Str)] string message);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_document(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string brief);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_component_json(IntPtr ctx, ulong entity, [MarshalAs(UnmanagedType.LPUTF8Str)] string type);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_read_query_data(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_changes(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_set_component_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string entity, [MarshalAs(UnmanagedType.LPUTF8Str)] string type, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_lookup(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
@@ -341,7 +416,6 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_abi_version();
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_view_size();
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_version();
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_create(ushort port);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern void fu_destroy(IntPtr ctx);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_tick(IntPtr ctx, float dt);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_run_script(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
@@ -356,5 +430,12 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_entity_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern void fu_free(IntPtr memory);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_world(IntPtr ctx);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_create_ex(ushort port, uint flags);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_rest_status(IntPtr ctx);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_changed(IntPtr ctx, int handle);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_query_read_data(IntPtr ctx, int handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_component_json_into(IntPtr ctx, ulong entity, ulong type, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
     }
 }
