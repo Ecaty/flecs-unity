@@ -93,8 +93,6 @@ namespace Ecaty.Flecs
             Session = new FlecsSession(port, restReadOnly);
             if (Session.RestStatus < 0)
                 Debug.LogWarning(Session.RestError + " Flecs Explorer is unavailable for this world.", this);
-            if (Session.CompatSwitches != 0)
-                Debug.LogWarning("Flecs bridge bisect switches active: 0x" + Session.CompatSwitches.ToString("x"), this);
             if (source)
                 Session.SetManagedScript(path, source.text);
             SyncViews();
@@ -124,8 +122,6 @@ namespace Ecaty.Flecs
                     view.Root.transform.SetParent(transform, false);
                     objects.Add(v.Entity, view);
                 }
-                else if ((Session.CompatSwitches & FlecsSession.CompatRenameViews) != 0)
-                    view.Root.name = Session.EntityName(v.Entity);
             }
             // Detach survivors before removing old parents; never destroy a surviving child.
             for (int i = 0; i < count; i++)

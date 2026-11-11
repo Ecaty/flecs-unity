@@ -54,8 +54,7 @@ namespace Ecaty.Flecs
         {
             if (fu_abi_version() != AbiVersion || fu_view_size() != Marshal.SizeOf<View>())
                 throw new InvalidOperationException("Native/managed ABI mismatch. Rebuild matching sources.");
-            CompatSwitches = ReadCompatSwitches();
-            context = fu_create_ex(restPort, (restReadOnly ? 1u : 0u) | (CompatSwitches & NativeCompatMask));
+            context = fu_create_ex(restPort, restReadOnly ? 1u : 0u);
             if (context == IntPtr.Zero)
                 throw new InvalidOperationException(Utf8(fu_last_error(IntPtr.Zero)));
             Sessions.Add(this);
@@ -71,40 +70,6 @@ namespace Ecaty.Flecs
         public string RestError
         {
             get;
-        }
-        /// <summary>
-        /// Diagnostic bisect switches that restore pre-ABI-3 behaviour, read when a session is created from the
-        /// FLECS_BRIDGE_COMPAT environment variable or Temp/flecs-bridge-compat.txt (decimal or 0x hex). 0 in normal use.
-        /// 0x100 parse scripts every call, 0x200 drop compiled queries on source changes, 0x400 per-entity view reads,
-        /// 0x1000 rename view objects every sync, 0x4000 ReadQuery through the string-keyed query path.
-        /// </summary>
-        public uint CompatSwitches
-        {
-            get;
-        }
-        public const uint CompatRenameViews = 0x1000, CompatNamedReadQuery = 0x4000;
-        private const uint NativeCompatMask = 0x700;
-        private const string CompatFile = "Temp/flecs-bridge-compat.txt";
-        private static uint ReadCompatSwitches()
-        {
-            string text = Environment.GetEnvironmentVariable("FLECS_BRIDGE_COMPAT");
-            try
-            {
-                if (string.IsNullOrWhiteSpace(text) && System.IO.File.Exists(CompatFile))
-                    text = System.IO.File.ReadAllText(CompatFile);
-            }
-            catch (System.IO.IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-            if (string.IsNullOrWhiteSpace(text))
-                return 0;
-            text = text.Trim();
-            bool hex = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
-            return uint.TryParse(hex ? text.Substring(2) : text, hex ? System.Globalization.NumberStyles.HexNumber :
-                System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out uint value) ? value : 0;
         }
 
         public void Tick(float seconds)
@@ -278,13 +243,11 @@ namespace Ecaty.Flecs
         public unsafe int ReadQuery<T>(string expression, string variable, ref ulong[] entities, ref ulong[] targets, ref T[] values) where T : unmanaged
         {
             Check();
-            bool named = (CompatSwitches & CompatNamedReadQuery) != 0;
-            int handle = named ? 0 : QueryHandle(expression);
+            int handle = QueryHandle(expression);
             int Read(ulong[] e, ulong[] t, T[] v)
             {
                 fixed (T* data = v)
-                    return named ? fu_read_query_data(context, expression, variable, e, t, data, sizeof(T), v.Length)
-                        : fu_query_read_data(context, handle, variable, e, t, data, sizeof(T), v.Length);
+                    return fu_query_read_data(context, handle, variable, e, t, data, sizeof(T), v.Length);
             }
             int count = Read(entities, targets, values);
             if (count < 0)
@@ -478,7 +441,6 @@ namespace Ecaty.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_query_changed(IntPtr ctx, int handle);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_json_h(IntPtr ctx, int handle);
-        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_read_query_data(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_query_read_data(IntPtr ctx, int handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_component_json_into(IntPtr ctx, ulong entity, ulong type, byte* output, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
