@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Runtime.Flecs
 {
@@ -20,6 +22,7 @@ namespace Runtime.Flecs
         private static readonly HashSet<FlecsSession> Sessions = new HashSet<FlecsSession>();
         private IntPtr context;
         private readonly Dictionary<string, ulong> typeIds = new Dictionary<string, ulong>();
+        private readonly HashSet<(Type, ulong)> checkedLayouts = new HashSet<(Type, ulong)>();
         private readonly Dictionary<string, int> queryHandles = new Dictionary<string, int>();
         public const int AbiVersion = 3;
         private readonly List<string> managedPaths = new List<string>();
@@ -90,6 +93,7 @@ namespace Runtime.Flecs
             if (fu_set_managed_script(context, path, script) != 0)
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             typeIds.Clear();
+            checkedLayouts.Clear();
             SourceRevision++;
             if (!managedPaths.Contains(path))
                 managedPaths.Add(path);
@@ -270,6 +274,7 @@ namespace Runtime.Flecs
         {
             Check();
             typeIds.Clear();
+            checkedLayouts.Clear();
             SourceRevision++;
             managedPaths.Remove(path);
             return fu_delete_entity(context, path);
@@ -319,6 +324,7 @@ namespace Runtime.Flecs
             if (fu_script_undo(context, path) != 0)
                 throw new InvalidOperationException("No valid source undo available.");
             typeIds.Clear();
+            checkedLayouts.Clear();
             SourceRevision++;
         }
         public void EditScript(string source, string entity, string type, string expression)
@@ -327,6 +333,7 @@ namespace Runtime.Flecs
             if (fu_script_edit(context, source, entity, type, expression) != 0)
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             typeIds.Clear();
+            checkedLayouts.Clear();
             SourceRevision++;
         }
         private unsafe ulong DataType<T>(string path) where T : unmanaged
@@ -334,7 +341,46 @@ namespace Runtime.Flecs
             ulong type = TypeId(path);
             if (type == 0 || fu_component_size(context, type) != sizeof(T))
                 throw new InvalidOperationException("Runtime component layout mismatch or non-POD type: " + path);
+            if (checkedLayouts.Add((typeof(T), type)))
+                CheckLayout<T>(type, path);
             return type;
+        }
+        private static readonly Regex MemberOffset = new Regex(@"""offset"":(\d+)", RegexOptions.Compiled);
+        // Same size is not enough: a reordered or retyped mirror would read the wrong fields silently.
+        // Each managed field must start at a native member offset. Skipped when the marshalled layout
+        // differs from the managed one (bool/char fields), since Marshal.OffsetOf reports marshalled offsets.
+        private unsafe void CheckLayout<T>(ulong type, string path) where T : unmanaged
+        {
+            try
+            {
+                if (Marshal.SizeOf<T>() != sizeof(T))
+                    return;
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+            var buffer = new byte[2048];
+            int length;
+            fixed (byte* data = buffer)
+                length = fu_type_layout(context, type, data, buffer.Length);
+            if (length > buffer.Length)
+            {
+                buffer = new byte[length];
+                fixed (byte* data = buffer)
+                    length = fu_type_layout(context, type, data, buffer.Length);
+            }
+            if (length <= 0)
+                return;
+            var offsets = new HashSet<int>();
+            foreach (Match match in MemberOffset.Matches(Encoding.UTF8.GetString(buffer, 0, length)))
+                offsets.Add(int.Parse(match.Groups[1].Value));
+            foreach (var field in typeof(T).GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            {
+                int offset = Marshal.OffsetOf<T>(field.Name).ToInt32();
+                if (!offsets.Contains(offset))
+                    throw new InvalidOperationException("Runtime component layout mismatch: " + typeof(T).Name + "." + field.Name + " at offset " + offset + " does not match a member of " + path);
+            }
         }
         public unsafe bool TryRead<T>(ulong entity, string type, out T value) where T : unmanaged
         {
@@ -443,6 +489,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_json_h(IntPtr ctx, int handle);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_query_read_data(IntPtr ctx, int handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_component_json_into(IntPtr ctx, ulong entity, ulong type, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_type_layout(IntPtr ctx, ulong type, byte* output, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
     }
 }
