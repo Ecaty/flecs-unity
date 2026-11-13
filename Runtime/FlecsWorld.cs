@@ -11,7 +11,7 @@ namespace Runtime.Flecs
         public int restPort = 27750;
         [Tooltip("REST refuses requests that modify the world (inspection only).")]
         public bool restReadOnly;
-        // REST is unauthenticated and read-write, so release players never start it (docs/FLECS-ARCHITECTURE-AUDIT.md).
+        // REST is unauthenticated and read-write, so release players never start it (https://github.com/Ecaty/flecs-native/blob/main/docs/FLECS-ARCHITECTURE-AUDIT.md).
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public ushort EffectiveRestPort => (ushort)restPort;
 #else
