@@ -77,6 +77,13 @@ namespace Runtime.Flecs
         {
             get; private set;
         }
+        // Sources and worlds add and remove entities and kinds: what was cached by name or id is looked up again.
+        private void SourcesChanged()
+        {
+            typeIds.Clear();
+            verified.Clear();
+            SourceRevision++;
+        }
         private View[] buffer = new View[32];
         private byte[] layoutBuffer = new byte[1024];
         // (native type id, managed type) pairs whose layout already matched; cleared when sources change.
@@ -153,6 +160,7 @@ namespace Runtime.Flecs
         public bool TryApplySource(string name, string scope, string code, out bool removed, out string error, out int line, out int column)
         {
             Check();
+            SourcesChanged();
             int rc = fu_source_apply(context, name, scope, code);
             removed = rc == 1;
             error = null;
@@ -178,6 +186,7 @@ namespace Runtime.Flecs
         public bool TryUndoSource(string name, out string error)
         {
             Check();
+            SourcesChanged();
             error = null;
             if (fu_source_undo(context, name) >= 0)
                 return true;
@@ -188,6 +197,7 @@ namespace Runtime.Flecs
         public bool TryRemoveSource(string name, out string error)
         {
             Check();
+            SourcesChanged();
             error = null;
             if (fu_source_remove(context, name) >= 0)
                 return true;
@@ -237,6 +247,7 @@ namespace Runtime.Flecs
         public bool DeleteWorld(ulong world)
         {
             Check();
+            SourcesChanged();
             return fu_world_delete(context, world) == 1;
         }
         /// <summary>Enters a world; 0 leaves the current one. Throws when the entity is not a world.</summary>
@@ -265,6 +276,7 @@ namespace Runtime.Flecs
         public bool TryRunWorldScript(ulong world, string code, out string error, out int line, out int column)
         {
             Check();
+            SourcesChanged();
             error = null;
             line = column = 0;
             if (fu_world_run_script(context, world, code) == 0)
@@ -293,6 +305,7 @@ namespace Runtime.Flecs
         public bool TryLoadWorld(string id, string document, out ulong world, out string error)
         {
             Check();
+            SourcesChanged();
             error = null;
             world = fu_world_load_json(context, id, document);
             if (world != 0)
@@ -311,6 +324,7 @@ namespace Runtime.Flecs
         public bool TryRewindWorld(ulong world, out ulong restored, out string error)
         {
             Check();
+            SourcesChanged();
             error = null;
             restored = fu_world_rewind(context, world);
             if (restored != 0)
