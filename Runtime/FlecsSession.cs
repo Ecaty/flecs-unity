@@ -594,6 +594,15 @@ namespace Runtime.Flecs
             Check();
             return fu_release(context, entity, relation, owner) == 1;
         }
+        /// <summary>Removes a component, tag or (with <paramref name="target"/>) a pair from an entity. Returns false when the entity did not have it.</summary>
+        public bool RemoveComponent(ulong entity, ulong type, ulong target = 0)
+        {
+            Check();
+            int rc = fu_remove_component(context, entity, type, target);
+            if (rc < 0)
+                throw new ArgumentException("RemoveComponent needs a live entity and type.");
+            return rc == 1;
+        }
         public int DeleteEntity(string path)
         {
             Check();
@@ -856,6 +865,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_error_position(IntPtr ctx, out int line, out int column);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_spawn(IntPtr ctx, ulong kind, ulong parent, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_attach(IntPtr ctx, ulong entity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_remove_component(IntPtr ctx, ulong entity, ulong type, ulong target);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_delete(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_enter(IntPtr ctx, ulong world);
