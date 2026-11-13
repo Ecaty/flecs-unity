@@ -37,7 +37,12 @@ namespace Runtime.Flecs
         public void ReleaseAppearance(ulong id, object owner)
         {
             if (appearanceOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
+            {
                 appearanceOwners.Remove(id);
+                // Flecs data may not change again, so show it now instead of keeping what the owner left.
+                if (objects.TryGetValue(id, out var view) && view.HasLast)
+                    ApplyColor(view, view.Last);
+            }
         }
         public bool AcquirePose(ulong id, object owner)
         {
@@ -49,17 +54,24 @@ namespace Runtime.Flecs
         public void ReleasePose(ulong id, object owner)
         {
             if (poseOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
+            {
                 poseOwners.Remove(id);
+                if (objects.TryGetValue(id, out var view) && view.HasLast)
+                    ApplyPose(view, view.Last);
+            }
         }
         public string Error
         {
             get; private set;
         }
         private readonly Dictionary<ulong, PresentedEntity> objects = new Dictionary<ulong, PresentedEntity>();
-        private readonly HashSet<ulong> seen = new HashSet<ulong>();
-        private readonly List<ulong> removed = new List<ulong>();
+        // Roots back to their entity, so a removed view can find the child views hanging below it.
+        private readonly Dictionary<Transform, ulong> entityOfRoot = new Dictionary<Transform, ulong>();
+        // Parent entity id -> child views created before that parent became a view.
+        private readonly Dictionary<ulong, List<ulong>> waiting = new Dictionary<ulong, List<ulong>>();
         private FlecsSession.View[] acknowledgements = new FlecsSession.View[32];
         private int appliedFrame;
+        private readonly HashSet<ulong> acknowledged = new HashSet<ulong>();
         private Material material;
         private MaterialPropertyBlock properties;
         private static readonly int ColorId = Shader.PropertyToID("_Color"), BaseColorId = Shader.PropertyToID("_BaseColor");
@@ -69,6 +81,9 @@ namespace Runtime.Flecs
         private sealed class PresentedEntity
         {
             public GameObject Root, Mesh;
+            public ulong Parent;
+            public FlecsSession.View Last;
+            public bool HasLast;
             public Renderer Renderer;
             public TextMesh Text;
             public int Kind = int.MinValue;
@@ -108,35 +123,48 @@ namespace Runtime.Flecs
         {
             if (Session == null || Session.IsDisposed)
                 return;
-            int count = Session.ReadViews(out var views);
-            seen.Clear();
-            // First pass creates all parents before assigning hierarchy.
-            for (int i = 0; i < count; i++)
+            // The spans point at native memory valid until the next ViewChanges call.
+            Session.ViewChanges(out var changed, out var gone);
+            for (int i = 0; i < gone.Length; i++)
+                RemoveView(gone[i]);
+            // First pass creates missing objects so parents exist before the second pass links and applies data.
+            for (int i = 0; i < changed.Length; i++)
             {
-                var v = views[i];
-                seen.Add(v.Entity);
-                if (!objects.TryGetValue(v.Entity, out var view))
+                ulong entity = changed[i].Entity;
+                if (objects.ContainsKey(entity))
+                    continue;
+                // Names are fetched once per new view; per-frame name strings were a steady GC source.
+                var created = new PresentedEntity { Root = new GameObject(Session.EntityName(entity)) };
+                created.Root.transform.SetParent(transform, false);
+                objects.Add(entity, created);
+                entityOfRoot.Add(created.Root.transform, entity);
+                if (waiting.TryGetValue(entity, out var children))
                 {
-                    // Names are fetched once per new view; per-frame name strings were a steady GC source.
-                    view = new PresentedEntity { Root = new GameObject(Session.EntityName(v.Entity)) };
-                    view.Root.transform.SetParent(transform, false);
-                    objects.Add(v.Entity, view);
+                    waiting.Remove(entity);
+                    foreach (var childId in children)
+                        if (objects.TryGetValue(childId, out var child) && child.Parent == entity && child.Root.transform.parent != created.Root.transform)
+                            child.Root.transform.SetParent(created.Root.transform, false);
                 }
             }
-            // Detach survivors before removing old parents; never destroy a surviving child.
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < changed.Length; i++)
             {
-                var v = views[i];
+                ref readonly var v = ref changed[i];
                 var view = objects[v.Entity];
-                Transform parent = v.Parent != 0 && seen.Contains(v.Parent) && objects.TryGetValue(v.Parent, out var p)
-                    ? p.Root.transform : transform;
+                view.Parent = v.Parent;
+                view.Last = v;
+                view.HasLast = true;
+                Transform parent = transform;
+                if (v.Parent != 0)
+                {
+                    if (objects.TryGetValue(v.Parent, out var p))
+                        parent = p.Root.transform;
+                    else
+                        WaitFor(v.Parent, v.Entity);
+                }
                 if (view.Root.transform.parent != parent)
                     view.Root.transform.SetParent(parent, false);
                 if (!poseOwners.ContainsKey(v.Entity))
-                {
-                    view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
-                    view.Root.transform.localRotation = Quaternion.Euler(v.Rx, v.Ry, v.Rz);
-                }
+                    ApplyPose(view, v);
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
                 {
@@ -157,13 +185,8 @@ namespace Runtime.Flecs
                     }
                 }
                 var color = new Color(v.R, v.G, v.B, v.A);
-                if (view.Renderer && !appearanceOwners.ContainsKey(v.Entity))
-                {
-                    properties.Clear();
-                    properties.SetColor(ColorId, color);
-                    properties.SetColor(BaseColorId, color);
-                    view.Renderer.SetPropertyBlock(properties);
-                }
+                if (!appearanceOwners.ContainsKey(v.Entity))
+                    ApplyColor(view, v);
                 if (v.HasLabel != 0)
                 {
                     if (!view.Text)
@@ -189,56 +212,106 @@ namespace Runtime.Flecs
                     view.LabelLength = -1;
                 }
             }
-            // Read actual object properties after application, into a separate observation component.
-            if (acknowledgements.Length < count)
-                acknowledgements = new FlecsSession.View[Math.Max(count, acknowledgements.Length * 2)];
-            for (int i = 0; i < count; i++)
+            // Presented observes what Unity shows: changed views plus pose-owned ones, whose owners move them every frame.
+            acknowledged.Clear();
+            int total = changed.Length + poseOwners.Count;
+            if (total == 0)
+                return;
+            if (acknowledgements.Length < total)
+                acknowledgements = new FlecsSession.View[Math.Max(total, acknowledgements.Length * 2)];
+            int n = 0;
+            for (int i = 0; i < changed.Length; i++)
             {
-                var source = views[i];
-                var view = objects[source.Entity];
-                var t = view.Root.transform;
-                var position = t.localPosition;
-                var rotation = t.localEulerAngles;
-                var scale = t.localScale;
-                Color color = Color.white;
-                if (view.Renderer)
-                {
-                    view.Renderer.GetPropertyBlock(properties);
-                    color = properties.GetColor(BaseColorId);
-                }
-                else if (view.Text)
-                    color = view.Text.color;
-                acknowledgements[i] = new FlecsSession.View
-                {
-                    Entity = source.Entity,
-                    Parent = source.Parent,
-                    Px = position.x,
-                    Py = position.y,
-                    Pz = position.z,
-                    Rx = rotation.x,
-                    Ry = rotation.y,
-                    Rz = rotation.z,
-                    Sx = scale.x,
-                    Sy = scale.y,
-                    Sz = scale.z,
-                    R = color.r,
-                    G = color.g,
-                    B = color.b,
-                    A = color.a,
-                    Primitive = view.Renderer ? view.Kind : -1,
-                    HasLabel = view.Text ? 1 : 0
-                };
+                acknowledged.Add(changed[i].Entity);
+                acknowledgements[n++] = Observe(objects[changed[i].Entity], changed[i].Entity, changed[i].Parent);
             }
-            Session.WritePresented(acknowledgements, count, ++appliedFrame);
-            removed.Clear();
-            foreach (var pair in objects)
-            if (!seen.Contains(pair.Key))
-                removed.Add(pair.Key);
-            foreach (var id in removed)
+            foreach (var id in poseOwners.Keys)
+                if (objects.TryGetValue(id, out var owned) && owned.HasLast && acknowledged.Add(id))
+                    acknowledgements[n++] = Observe(owned, owned.Last.Entity, owned.Last.Parent);
+            if (n > 0)
+                Session.WritePresented(acknowledgements, n, ++appliedFrame);
+        }
+        private void ApplyPose(PresentedEntity view, in FlecsSession.View v)
+        {
+            view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
+            view.Root.transform.localRotation = (v.Flags & FlecsSession.ViewOriented) != 0
+                ? new Quaternion(v.Qx, v.Qy, v.Qz, v.Qw) : Quaternion.Euler(v.Rx, v.Ry, v.Rz);
+        }
+        private void ApplyColor(PresentedEntity view, in FlecsSession.View v)
+        {
+            if (!view.Renderer)
+                return;
+            var color = new Color(v.R, v.G, v.B, v.A);
+            properties.Clear();
+            properties.SetColor(ColorId, color);
+            properties.SetColor(BaseColorId, color);
+            view.Renderer.SetPropertyBlock(properties);
+        }
+        private FlecsSession.View Observe(PresentedEntity view, ulong entity, ulong parent)
+        {
+            var t = view.Root.transform;
+            var position = t.localPosition;
+            var rotation = t.localEulerAngles;
+            var scale = t.localScale;
+            Color color = Color.white;
+            if (view.Renderer)
             {
-                DestroyOwnedObject(objects[id].Root);
-                objects.Remove(id);
+                view.Renderer.GetPropertyBlock(properties);
+                color = properties.GetColor(BaseColorId);
             }
+            else if (view.Text)
+                color = view.Text.color;
+            return new FlecsSession.View
+            {
+                Entity = entity,
+                Parent = parent,
+                Px = position.x,
+                Py = position.y,
+                Pz = position.z,
+                Rx = rotation.x,
+                Ry = rotation.y,
+                Rz = rotation.z,
+                Sx = scale.x,
+                Sy = scale.y,
+                Sz = scale.z,
+                R = color.r,
+                G = color.g,
+                B = color.b,
+                A = color.a,
+                Primitive = view.Renderer ? view.Kind : -1,
+                HasLabel = view.Text ? 1 : 0
+            };
+        }
+        private void WaitFor(ulong parent, ulong child)
+        {
+            if (!waiting.TryGetValue(parent, out var list))
+                waiting.Add(parent, list = new List<ulong>());
+            if (!list.Contains(child))
+                list.Add(child);
+        }
+        private void RemoveView(ulong id)
+        {
+            if (!objects.TryGetValue(id, out var view))
+                return;
+            var root = view.Root.transform;
+            // Surviving child views move to the world root; Unity would destroy them with this parent.
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                var child = root.GetChild(i);
+                if (!entityOfRoot.TryGetValue(child, out ulong childId))
+                    continue;
+                child.SetParent(transform, false);
+                WaitFor(id, childId);
+            }
+            entityOfRoot.Remove(root);
+            if (view.Parent != 0 && waiting.TryGetValue(view.Parent, out var list))
+            {
+                list.Remove(id);
+                if (list.Count == 0)
+                    waiting.Remove(view.Parent);
+            }
+            DestroyOwnedObject(view.Root);
+            objects.Remove(id);
         }
         // Compares the native label bytes with the last applied ones and builds a string only when the text changed.
         private void UpdateLabel(PresentedEntity view, ulong entity)
@@ -287,6 +360,8 @@ namespace Runtime.Flecs
                 if (view.Root && view.Root.transform.parent == transform)
                     DestroyOwnedObject(view.Root);
             objects.Clear();
+            entityOfRoot.Clear();
+            waiting.Clear();
             DestroyOwnedObject(material);
             material = null;
             properties = null;

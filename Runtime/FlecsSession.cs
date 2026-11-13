@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
+using Unity.Collections.LowLevel.Unsafe;
+using UnityEngine;
 
 namespace Runtime.Flecs
 {
@@ -13,6 +17,47 @@ namespace Runtime.Flecs
             public ulong Entity, Parent;
             public float Px, Py, Pz, Rx, Ry, Rz, Sx, Sy, Sz, R, G, B, A;
             public int Primitive, HasLabel;
+            public float Qx, Qy, Qz, Qw;
+            public uint Flags;
+        }
+        /// <summary>Set in <see cref="View.Flags"/> when Qx..Qw is the rotation and Rx..Rz must be ignored.</summary>
+        public const uint ViewOriented = 1;
+
+        /// <summary>A fact Unity reports to the world; <see cref="Kind"/> is the event entity's id.</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct Event
+        {
+            public ulong Kind, Entity, Other;
+            public float X, Y, Z, Value;
+        }
+
+        public sealed class TypeField
+        {
+            public string Name;
+            public int Offset, Size;
+            public string Kind;
+        }
+        /// <summary>Native layout of a reflected type, nested structs flattened to leaf fields.</summary>
+        public sealed class TypeLayout
+        {
+            public int Size, Alignment;
+            public TypeField[] Fields;
+        }
+        [Serializable] private sealed class LayoutJson
+        {
+            public int size, alignment;
+            public FieldJson[] fields;
+        }
+        [Serializable] private sealed class FieldJson
+        {
+            public string name, kind;
+            public int offset, size;
+        }
+        private struct Leaf
+        {
+            public string Name;
+            public int Offset, Size;
+            public bool Float;
         }
 
         [DllImport("flecs_unity")] private static extern IntPtr fu_entity_path(IntPtr ctx, ulong id);
@@ -21,7 +66,7 @@ namespace Runtime.Flecs
         private IntPtr context;
         private readonly Dictionary<string, ulong> typeIds = new Dictionary<string, ulong>();
         private readonly Dictionary<string, int> queryHandles = new Dictionary<string, int>();
-        public const int AbiVersion = 3;
+        public const int AbiVersion = 4;
         private readonly List<string> managedPaths = new List<string>();
         public IReadOnlyList<string> ManagedPaths => managedPaths;
         public int SourceRevision
@@ -29,6 +74,9 @@ namespace Runtime.Flecs
             get; private set;
         }
         private View[] buffer = new View[32];
+        private byte[] layoutBuffer = new byte[1024];
+        // (native type id, managed type) pairs whose layout already matched; cleared when sources change.
+        private readonly HashSet<(ulong, Type)> verified = new HashSet<(ulong, Type)>();
         public IntPtr NativeContext
         {
             get
@@ -90,6 +138,7 @@ namespace Runtime.Flecs
             if (fu_set_managed_script(context, path, script) != 0)
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             typeIds.Clear();
+            verified.Clear();
             SourceRevision++;
             if (!managedPaths.Contains(path))
                 managedPaths.Add(path);
@@ -191,6 +240,63 @@ namespace Runtime.Flecs
             views = buffer;
             return count;
         }
+        /// <summary>
+        /// Views changed since the previous call and entities that stopped being views (first call: every view).
+        /// Both spans point at native memory that stays valid only until the next call for this session.
+        /// </summary>
+        public unsafe void ViewChanges(out ReadOnlySpan<View> changed, out ReadOnlySpan<ulong> removed)
+        {
+            Check();
+            IntPtr views = fu_view_changes(context, out int count, out IntPtr gone, out int goneCount);
+            if (views == IntPtr.Zero)
+                throw new InvalidOperationException("Could not read Flecs view changes: " + Utf8(fu_last_error(context)));
+            changed = new ReadOnlySpan<View>((void*)views, count);
+            removed = new ReadOnlySpan<ulong>((void*)gone, goneCount);
+        }
+        /// <summary>Delivers facts to the world as Flecs events. Returns how many were delivered (dead entities are skipped).</summary>
+        public unsafe int Emit(Event[] events, int count)
+        {
+            Check();
+            if (events == null || count < 0 || count > events.Length)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            int rc = fu_emit_events(context, events, count);
+            if (rc < 0)
+                throw new InvalidOperationException("Could not emit events: " + Utf8(fu_last_error(context)));
+            return rc;
+        }
+        /// <summary>Native layout of a reflected type, or null when the type is unknown.</summary>
+        public TypeLayout Layout(string typePath)
+        {
+            Check();
+            ulong type = TypeId(typePath);
+            return type == 0 ? null : LayoutOf(type);
+        }
+        private unsafe TypeLayout LayoutOf(ulong type)
+        {
+            int length;
+            fixed (byte* data = layoutBuffer)
+                length = fu_type_layout_into(context, type, data, layoutBuffer.Length);
+            if (length > layoutBuffer.Length)
+            {
+                layoutBuffer = new byte[Math.Max(length, layoutBuffer.Length * 2)];
+                fixed (byte* data = layoutBuffer)
+                    length = fu_type_layout_into(context, type, data, layoutBuffer.Length);
+            }
+            if (length < 0)
+                return null;
+            var json = JsonUtility.FromJson<LayoutJson>(Encoding.UTF8.GetString(layoutBuffer, 0, length));
+            if (json == null)
+                return null;
+            var layout = new TypeLayout { Size = json.size, Alignment = json.alignment };
+            int n = json.fields?.Length ?? 0;
+            layout.Fields = new TypeField[n];
+            for (int i = 0; i < n; i++)
+            {
+                var f = json.fields[i];
+                layout.Fields[i] = new TypeField { Name = f.name, Offset = f.offset, Size = f.size, Kind = f.kind };
+            }
+            return layout;
+        }
         public void WritePresented(View[] views, int count, int frame)
         {
             Check();
@@ -279,6 +385,7 @@ namespace Runtime.Flecs
         {
             Check();
             typeIds.Clear();
+            verified.Clear();
             SourceRevision++;
             managedPaths.Remove(path);
             return fu_delete_entity(context, path);
@@ -328,6 +435,7 @@ namespace Runtime.Flecs
             if (fu_script_undo(context, path) != 0)
                 throw new InvalidOperationException("No valid source undo available.");
             typeIds.Clear();
+            verified.Clear();
             SourceRevision++;
         }
         public void EditScript(string source, string entity, string type, string expression)
@@ -336,6 +444,7 @@ namespace Runtime.Flecs
             if (fu_script_edit(context, source, entity, type, expression) != 0)
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             typeIds.Clear();
+            verified.Clear();
             SourceRevision++;
         }
         private unsafe ulong DataType<T>(string path) where T : unmanaged
@@ -343,7 +452,75 @@ namespace Runtime.Flecs
             ulong type = TypeId(path);
             if (type == 0 || fu_component_size(context, type) != sizeof(T))
                 throw new InvalidOperationException("Runtime component layout mismatch or non-POD type: " + path);
+            if (!verified.Contains((type, typeof(T))))
+            {
+                VerifyLayout(path, type, typeof(T));
+                verified.Add((type, typeof(T)));
+            }
             return type;
+        }
+        // Size alone cannot catch swapped or re-typed fields; compare every leaf once per (type, managed type).
+        private void VerifyLayout(string path, ulong type, Type managed)
+        {
+            var native = LayoutOf(type);
+            var leaves = new List<Leaf>();
+            Flatten(managed, 0, "", leaves);
+            string problem = native == null ? "native layout unavailable" : Compare(native, leaves);
+            if (problem == null)
+                return;
+            var text = new StringBuilder("Runtime component layout mismatch (" + problem + "): " + path + " vs " + managed.FullName + "\nnative:");
+            if (native != null)
+                foreach (var f in native.Fields)
+                    text.Append("\n  ").Append(f.Name).Append(" offset ").Append(f.Offset).Append(" size ").Append(f.Size).Append(' ').Append(f.Kind);
+            text.Append("\nmanaged:");
+            foreach (var l in leaves)
+                text.Append("\n  ").Append(l.Name).Append(" offset ").Append(l.Offset).Append(" size ").Append(l.Size).Append(l.Float ? " float" : "");
+            throw new InvalidOperationException(text.ToString());
+        }
+        private static void Flatten(Type type, int offset, string prefix, List<Leaf> leaves)
+        {
+            if (type.IsEnum)
+                type = Enum.GetUnderlyingType(type);
+            if (type.IsPrimitive)
+            {
+                leaves.Add(new Leaf { Name = prefix, Offset = offset, Size = UnsafeUtility.SizeOf(type), Float = type == typeof(float) || type == typeof(double) });
+                return;
+            }
+            foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                string name = field.Name;
+                if (name.Length > 2 && name[0] == '<')
+                    name = name.Substring(1, name.IndexOf('>') - 1);
+                Flatten(field.FieldType, offset + UnsafeUtility.GetFieldOffset(field), prefix.Length == 0 ? name : prefix + "." + name, leaves);
+            }
+        }
+        private static string Normalize(string name)
+        {
+            int dot = name.LastIndexOf('.');
+            return (dot >= 0 ? name.Substring(dot + 1) : name).ToLowerInvariant().Replace("_", "");
+        }
+        private static string Compare(TypeLayout native, List<Leaf> leaves)
+        {
+            var fields = native.Fields;
+            if (fields.Length != leaves.Count)
+                return "field count " + leaves.Count + " vs native " + fields.Length;
+            for (int i = 0; i < fields.Length; i++)
+            {
+                var f = fields[i];
+                var l = leaves[i];
+                if (f.Offset != l.Offset || f.Size != l.Size)
+                    return "field " + i + " offset/size";
+                bool nativeFloat = f.Kind == "f32" || f.Kind == "f64";
+                if (nativeFloat != l.Float)
+                    return "field " + i + " kind " + f.Kind;
+                string managedName = Normalize(l.Name);
+                if (managedName == Normalize(f.Name))
+                    continue;
+                for (int j = 0; j < fields.Length; j++)
+                    if (j != i && managedName == Normalize(fields[j].Name))
+                        return "field " + i + " name looks swapped with " + j;
+            }
+            return null;
         }
         public unsafe bool TryRead<T>(ulong entity, string type, out T value) where T : unmanaged
         {
@@ -453,6 +630,9 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_json_h(IntPtr ctx, int handle);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_query_read_data(IntPtr ctx, int handle, [MarshalAs(UnmanagedType.LPUTF8Str)] string variable, [Out] ulong[] entities, [Out] ulong[] targets, void* values, int size, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_component_json_into(IntPtr ctx, ulong entity, ulong type, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_view_changes(IntPtr ctx, out int count, out IntPtr removed, out int removedCount);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_type_layout_into(IntPtr ctx, ulong type, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_emit_events(IntPtr ctx, [In] Event[] events, int count);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
     }
 }
