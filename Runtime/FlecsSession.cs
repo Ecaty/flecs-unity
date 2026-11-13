@@ -70,7 +70,7 @@ namespace Runtime.Flecs
         private IntPtr context;
         private readonly Dictionary<string, ulong> typeIds = new Dictionary<string, ulong>();
         private readonly Dictionary<string, int> queryHandles = new Dictionary<string, int>();
-        public const int AbiVersion = 4;
+        public const int AbiVersion = 5;
         private readonly List<string> managedPaths = new List<string>();
         public IReadOnlyList<string> ManagedPaths => managedPaths;
         public int SourceRevision
@@ -146,6 +146,177 @@ namespace Runtime.Flecs
             SourceRevision++;
             if (!managedPaths.Contains(path))
                 managedPaths.Add(path);
+        }
+        /// <summary>Applies a named source text in place under <paramref name="scope"/>. A refused text changes nothing and returns false with the reason.</summary>
+        /// <param name="removed">True when something the previous text defined is gone.</param>
+        /// <param name="line">1-based line of the error in the text, 0 when unknown.</param>
+        public bool TryApplySource(string name, string scope, string code, out bool removed, out string error, out int line, out int column)
+        {
+            Check();
+            int rc = fu_source_apply(context, name, scope, code);
+            removed = rc == 1;
+            error = null;
+            line = column = 0;
+            if (rc >= 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            if (fu_error_position(context, out int l, out int c) == 1)
+            {
+                line = l;
+                column = c;
+            }
+            return false;
+        }
+        /// <summary>Applies a named source text in place and returns whether something was removed. Throws with the reason when the text is refused.</summary>
+        public bool ApplySource(string name, string scope, string code)
+        {
+            if (TryApplySource(name, scope, code, out bool removed, out string error, out int line, out _))
+                return removed;
+            throw new InvalidOperationException(name + (line > 0 ? " line " + line : "") + ": " + error);
+        }
+        /// <summary>Applies the text the source had before its last change. False with the reason when there is none or it is refused.</summary>
+        public bool TryUndoSource(string name, out string error)
+        {
+            Check();
+            error = null;
+            if (fu_source_undo(context, name) >= 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
+        }
+        /// <summary>Deletes a source and what it defines. False with the reason when an instance still uses one of its kinds.</summary>
+        public bool TryRemoveSource(string name, out string error)
+        {
+            Check();
+            error = null;
+            if (fu_source_remove(context, name) >= 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
+        }
+        /// <summary>Current text of a source, or null when there is no such source.</summary>
+        public unsafe string SourceText(string name)
+        {
+            Check();
+            int length;
+            fixed (byte* data = layoutBuffer)
+                length = fu_source_text_into(context, name, data, layoutBuffer.Length);
+            if (length > layoutBuffer.Length)
+            {
+                layoutBuffer = new byte[Math.Max(length, layoutBuffer.Length * 2)];
+                fixed (byte* data = layoutBuffer)
+                    length = fu_source_text_into(context, name, data, layoutBuffer.Length);
+            }
+            return length < 0 ? null : Encoding.UTF8.GetString(layoutBuffer, 0, length);
+        }
+        /// <summary>Creates an instance of a kind under <paramref name="parent"/> (0 for the root); its parts follow the kind's parts. <paramref name="name"/> may be null.</summary>
+        public ulong Spawn(ulong kind, ulong parent, string name)
+        {
+            Check();
+            ulong entity = fu_spawn(context, kind, parent, name);
+            if (entity == 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+            return entity;
+        }
+        /// <summary>Attaches the parts of an instance made another way to its kinds. Returns the number of kinds it has.</summary>
+        public int Attach(ulong entity)
+        {
+            Check();
+            return fu_attach(context, entity);
+        }
+        /// <summary>Creates the world <c>worlds.&lt;id&gt;</c> (letters, digits and '_') and returns its entity. Returns the existing one when it exists. Throws with the reason on failure.</summary>
+        public ulong CreateWorld(string id)
+        {
+            Check();
+            ulong world = fu_world_create(context, id);
+            if (world == 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+            return world;
+        }
+        /// <summary>Deletes a world with its content and its sources. False when the entity is not a world.</summary>
+        public bool DeleteWorld(ulong world)
+        {
+            Check();
+            return fu_world_delete(context, world) == 1;
+        }
+        /// <summary>Enters a world; 0 leaves the current one. Throws when the entity is not a world.</summary>
+        public void EnterWorld(ulong world)
+        {
+            Check();
+            if (fu_world_enter(context, world) < 0)
+                throw new InvalidOperationException("Entity " + world + " is not a world.");
+        }
+        /// <summary>The world that is entered, or 0.</summary>
+        public ulong EnteredWorld
+        {
+            get
+            {
+                Check();
+                return fu_world_entered(context);
+            }
+        }
+        /// <summary>Like <see cref="QueryOnce"/>, but returns only entities inside the world. Throws with the reason when the expression is invalid.</summary>
+        public string QueryWorld(ulong world, string expression, int limit = 0)
+        {
+            Check();
+            return Take(fu_world_query_json(context, world, expression, limit), true);
+        }
+        /// <summary>Evaluates a script under a world, so the entities it creates are created inside it. False with the reason and the 1-based position of the error (0 when unknown).</summary>
+        public bool TryRunWorldScript(ulong world, string code, out string error, out int line, out int column)
+        {
+            Check();
+            error = null;
+            line = column = 0;
+            if (fu_world_run_script(context, world, code) == 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            if (fu_error_position(context, out int l, out int c) == 1)
+            {
+                line = l;
+                column = c;
+            }
+            return false;
+        }
+        /// <summary>Evaluates a script under a world. Throws with the reason when it fails.</summary>
+        public void RunWorldScript(ulong world, string code)
+        {
+            if (!TryRunWorldScript(world, code, out string error, out int line, out _))
+                throw new InvalidOperationException((line > 0 ? "line " + line + ": " : "") + error);
+        }
+        /// <summary>The world as a JSON document: the texts of its sources and what each entity itself stores. Throws when the entity is not a world.</summary>
+        public string SaveWorld(ulong world)
+        {
+            Check();
+            return Take(fu_world_save_json(context, world), true);
+        }
+        /// <summary>Loads a document as <c>worlds.&lt;id&gt;</c>, replacing the world with that id only when all of it is accepted. Entities get new ids. False with the reason when refused.</summary>
+        public bool TryLoadWorld(string id, string document, out ulong world, out string error)
+        {
+            Check();
+            error = null;
+            world = fu_world_load_json(context, id, document);
+            if (world != 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
+        }
+        /// <summary>Keeps a document of the world in memory for <see cref="TryRewindWorld"/>. Throws when the entity is not a world.</summary>
+        public void SnapshotWorld(ulong world)
+        {
+            Check();
+            if (fu_world_snapshot(context, world) < 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+        }
+        /// <summary>Loads the snapshot of a world again. <paramref name="restored"/> is the new world entity. False with the reason when there is no snapshot.</summary>
+        public bool TryRewindWorld(ulong world, out ulong restored, out string error)
+        {
+            Check();
+            error = null;
+            restored = fu_world_rewind(context, world);
+            if (restored != 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
         }
         public string ManagedScriptSource(string path)
         {
@@ -664,5 +835,22 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_type_layout_into(IntPtr ctx, ulong type, byte* output, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_emit_events(IntPtr ctx, [In] Event[] events, int count);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_label_into(IntPtr ctx, ulong entity, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_source_apply(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string scope, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_source_undo(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_source_remove(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_source_text_into(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte* output, int capacity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_error_position(IntPtr ctx, out int line, out int column);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_spawn(IntPtr ctx, ulong kind, ulong parent, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_attach(IntPtr ctx, ulong entity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_delete(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_enter(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_entered(IntPtr ctx);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_world_query_json(IntPtr ctx, ulong world, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression, int limit);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_run_script(IntPtr ctx, ulong world, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_world_save_json(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_load_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_snapshot(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_rewind(IntPtr ctx, ulong world);
     }
 }

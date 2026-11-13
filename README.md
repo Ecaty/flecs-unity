@@ -6,7 +6,14 @@ Place the matching native library in the consuming Unity project's plugin direct
 
 Canonical context: [Ecaty AGENTS](https://github.com/Ecaty/Ecaty/blob/main/AGENTS.md), [PROJECT](https://github.com/Ecaty/Ecaty/blob/main/docs/PROJECT.md), [DEVELOPMENT](https://github.com/Ecaty/Ecaty/blob/main/docs/DEVELOPMENT.md), [STATUS](https://github.com/Ecaty/Ecaty/blob/main/docs/STATUS.md).
 
-Current C ABI: **v2**, 80-byte view unchanged. `fu_write_presented` accepts batched presentation acknowledgements into reflected `Presented`; authoritative components remain native-owned. Match the native binary and managed bridge version. Label owns its reflected UTF-8 string through C++ lifecycle hooks, including prefab copies.
+Current C ABI: **v5**, 96-byte view. Sources and kinds (`TryApplySource`, `ApplySource`, `Spawn`, `Attach`) edit kinds in place while their instances live. `fu_write_presented` accepts batched presentation acknowledgements into reflected `Presented`; authoritative components remain native-owned. Match the native binary and managed bridge version. Label owns its reflected UTF-8 string through C++ lifecycle hooks, including prefab copies.
+
+Sources, kinds and worlds on `FlecsSession`:
+
+- Sources: `TryApplySource`, `ApplySource`, `TryUndoSource`, `TryRemoveSource` and `SourceText` edit a named script text in place.
+- Kinds: `Spawn` makes an instance of a kind and `Attach` gives the parts of a scripted instance their kinds.
+- Worlds: `CreateWorld`, `DeleteWorld`, `EnterWorld` and `EnteredWorld` manage worlds. `QueryWorld`, `TryRunWorldScript` and `RunWorldScript` work inside one world.
+- Documents: `SaveWorld` writes a world as JSON and `TryLoadWorld` replaces a world with a document, all or nothing. `SnapshotWorld` and `TryRewindWorld` keep and restore a world for Play and Stop.
 
 `FlecsSession.ManagedScriptSource(path)` reads the active native managed source; `SetManagedScript(path, code)` creates/reloads it. Use the matching native library containing the additive `fu_managed_script_source` export. In Ecaty's pinned upstream runtime, managed Script reacts to Clock and external component inputs. The bridge presents its normal snapshot and writes Presented; it does not execute a second behavior system. See [runtime engine](https://github.com/Ecaty/Ecaty/blob/main/docs/RUNTIME-ENGINE.md).
 
