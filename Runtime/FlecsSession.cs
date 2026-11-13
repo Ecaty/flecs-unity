@@ -22,6 +22,10 @@ namespace Runtime.Flecs
         }
         /// <summary>Set in <see cref="View.Flags"/> when Qx..Qw is the rotation and Rx..Rz must be ignored.</summary>
         public const uint ViewOriented = 1;
+        /// <summary>Set in <see cref="View.Flags"/> while a (TransformOwner, owner) pair is on the view.</summary>
+        public const uint ViewPoseOwned = 2;
+        /// <summary>Set in <see cref="View.Flags"/> while an (AppearanceOwner, owner) pair is on the view.</summary>
+        public const uint ViewAppearanceOwned = 4;
 
         /// <summary>A fact Unity reports to the world; <see cref="Kind"/> is the event entity's id.</summary>
         [StructLayout(LayoutKind.Sequential)]
@@ -381,6 +385,30 @@ namespace Runtime.Flecs
             Check();
             return fu_lookup(context, path);
         }
+        ulong transformOwner, appearanceOwner;
+        /// <summary>The exclusive relationship whose target owns a view's pose.</summary>
+        public ulong TransformOwner => transformOwner != 0 ? transformOwner : transformOwner = Relation("TransformOwner");
+        /// <summary>The exclusive relationship whose target owns a view's appearance.</summary>
+        public ulong AppearanceOwner => appearanceOwner != 0 ? appearanceOwner : appearanceOwner = Relation("AppearanceOwner");
+        private ulong Relation(string name)
+        {
+            ulong id = Lookup(name);
+            if (id == 0)
+                throw new InvalidOperationException("The native library does not define " + name + "; rebuild it for this bridge version.");
+            return id;
+        }
+        /// <summary>True when <paramref name="owner"/> holds <paramref name="relation"/> on <paramref name="entity"/> afterwards.</summary>
+        public bool Claim(ulong entity, ulong relation, ulong owner)
+        {
+            Check();
+            return fu_claim(context, entity, relation, owner) == 1;
+        }
+        /// <summary>True when the pair was removed; false when <paramref name="owner"/> did not hold it.</summary>
+        public bool Release(ulong entity, ulong relation, ulong owner)
+        {
+            Check();
+            return fu_release(context, entity, relation, owner) == 1;
+        }
         public int DeleteEntity(string path)
         {
             Check();
@@ -597,6 +625,8 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_component_size(IntPtr ctx, ulong type);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_read_component(IntPtr ctx, ulong entity, ulong type, void* value, int size);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_write_components(IntPtr ctx, ulong type, [In] ulong[] entities, void* values, int size, int count);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_claim(IntPtr ctx, ulong entity, ulong relation, ulong owner);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_release(IntPtr ctx, ulong entity, ulong relation, ulong owner);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_delete_entity(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_pointer(IntPtr ctx, ulong entity, float x, float y, uint buttons, uint modifiers);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_keyboard(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, int down, int repeat, uint modifiers);

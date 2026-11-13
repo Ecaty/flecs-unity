@@ -25,40 +25,40 @@ namespace Runtime.Flecs
             get; private set;
         }
         public int ViewCount => objects.Count;
-        readonly Dictionary<ulong, object> poseOwners = new();
-        readonly Dictionary<ulong, object> appearanceOwners = new();
-        public bool AcquireAppearance(ulong id, object owner)
+        // Ownership lives in the world as exclusive (TransformOwner, owner) / (AppearanceOwner, owner) pairs.
+        // These sets only mirror it for the per-frame loop; the view stream is the authority.
+        readonly HashSet<ulong> poseOwned = new();
+        readonly HashSet<ulong> appearanceOwned = new();
+        public bool AcquireAppearance(ulong id, ulong owner)
         {
-            if (appearanceOwners.TryGetValue(id, out var current) && !ReferenceEquals(current, owner))
+            if (Session == null || Session.IsDisposed || !Session.Claim(id, Session.AppearanceOwner, owner))
                 return false;
-            appearanceOwners[id] = owner;
+            appearanceOwned.Add(id);
             return true;
         }
-        public void ReleaseAppearance(ulong id, object owner)
+        public void ReleaseAppearance(ulong id, ulong owner)
         {
-            if (appearanceOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
-            {
-                appearanceOwners.Remove(id);
-                // Flecs data may not change again, so show it now instead of keeping what the owner left.
-                if (objects.TryGetValue(id, out var view) && view.HasLast)
-                    ApplyColor(view, view.Last);
-            }
+            if (Session == null || Session.IsDisposed || !Session.Release(id, Session.AppearanceOwner, owner))
+                return;
+            appearanceOwned.Remove(id);
+            // Flecs data may not change again, so show it now instead of keeping what the owner left.
+            if (objects.TryGetValue(id, out var view) && view.HasLast)
+                ApplyColor(view, view.Last);
         }
-        public bool AcquirePose(ulong id, object owner)
+        public bool AcquirePose(ulong id, ulong owner)
         {
-            if (poseOwners.TryGetValue(id, out var current) && !ReferenceEquals(current, owner))
+            if (Session == null || Session.IsDisposed || !Session.Claim(id, Session.TransformOwner, owner))
                 return false;
-            poseOwners[id] = owner;
+            poseOwned.Add(id);
             return true;
         }
-        public void ReleasePose(ulong id, object owner)
+        public void ReleasePose(ulong id, ulong owner)
         {
-            if (poseOwners.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
-            {
-                poseOwners.Remove(id);
-                if (objects.TryGetValue(id, out var view) && view.HasLast)
-                    ApplyPose(view, view.Last);
-            }
+            if (Session == null || Session.IsDisposed || !Session.Release(id, Session.TransformOwner, owner))
+                return;
+            poseOwned.Remove(id);
+            if (objects.TryGetValue(id, out var view) && view.HasLast)
+                ApplyPose(view, view.Last);
         }
         public string Error
         {
@@ -153,6 +153,15 @@ namespace Runtime.Flecs
                 view.Parent = v.Parent;
                 view.Last = v;
                 view.HasLast = true;
+                bool poseHeld = (v.Flags & FlecsSession.ViewPoseOwned) != 0, appearanceHeld = (v.Flags & FlecsSession.ViewAppearanceOwned) != 0;
+                if (poseHeld)
+                    poseOwned.Add(v.Entity);
+                else
+                    poseOwned.Remove(v.Entity);
+                if (appearanceHeld)
+                    appearanceOwned.Add(v.Entity);
+                else
+                    appearanceOwned.Remove(v.Entity);
                 Transform parent = transform;
                 if (v.Parent != 0)
                 {
@@ -163,7 +172,7 @@ namespace Runtime.Flecs
                 }
                 if (view.Root.transform.parent != parent)
                     view.Root.transform.SetParent(parent, false);
-                if (!poseOwners.ContainsKey(v.Entity))
+                if (!poseHeld)
                     ApplyPose(view, v);
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
@@ -185,7 +194,7 @@ namespace Runtime.Flecs
                     }
                 }
                 var color = new Color(v.R, v.G, v.B, v.A);
-                if (!appearanceOwners.ContainsKey(v.Entity))
+                if (!appearanceHeld)
                     ApplyColor(view, v);
                 if (v.HasLabel != 0)
                 {
@@ -214,7 +223,7 @@ namespace Runtime.Flecs
             }
             // Presented observes what Unity shows: changed views plus pose-owned ones, whose owners move them every frame.
             acknowledged.Clear();
-            int total = changed.Length + poseOwners.Count;
+            int total = changed.Length + poseOwned.Count;
             if (total == 0)
                 return;
             if (acknowledgements.Length < total)
@@ -225,7 +234,7 @@ namespace Runtime.Flecs
                 acknowledged.Add(changed[i].Entity);
                 acknowledgements[n++] = Observe(objects[changed[i].Entity], changed[i].Entity, changed[i].Parent);
             }
-            foreach (var id in poseOwners.Keys)
+            foreach (var id in poseOwned)
                 if (objects.TryGetValue(id, out var owned) && owned.HasLast && acknowledged.Add(id))
                     acknowledgements[n++] = Observe(owned, owned.Last.Entity, owned.Last.Parent);
             if (n > 0)
@@ -310,6 +319,8 @@ namespace Runtime.Flecs
                 if (list.Count == 0)
                     waiting.Remove(view.Parent);
             }
+            poseOwned.Remove(id);
+            appearanceOwned.Remove(id);
             DestroyOwnedObject(view.Root);
             objects.Remove(id);
         }
@@ -348,8 +359,8 @@ namespace Runtime.Flecs
         public GameObject FindView(ulong entity) => objects.TryGetValue(entity, out var value) ? value.Root : null;
         public void Shutdown()
         {
-            poseOwners.Clear();
-            appearanceOwners.Clear();
+            poseOwned.Clear();
+            appearanceOwned.Clear();
             if (Session != null)
             {
                 Session.Dispose();
