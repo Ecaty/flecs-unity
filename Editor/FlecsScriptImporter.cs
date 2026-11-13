@@ -2,7 +2,7 @@ using System.IO;
 using UnityEditor.AssetImporters;
 using UnityEngine;
 
-namespace Ecaty.Flecs.Editor
+namespace Runtime.Flecs.Editor
 {
     [ScriptedImporter(1, "flecs")]
     public sealed class FlecsScriptImporter : ScriptedImporter

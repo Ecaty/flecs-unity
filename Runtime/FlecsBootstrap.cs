@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace Ecaty.Flecs
+namespace Runtime.Flecs
 {
     public static class FlecsBootstrap
     {

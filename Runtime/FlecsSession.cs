@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
-namespace Ecaty.Flecs
+namespace Runtime.Flecs
 {
     /// <summary>Owns one native Flecs world. Use only on Unity's main thread.</summary>
     public sealed class FlecsSession : IDisposable

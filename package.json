@@ -1,5 +1,5 @@
 {
-  "name": "com.ecaty.flecs-unity",
+  "name": "com.runtime.flecs",
   "version": "0.2.1",
   "displayName": "Flecs Unity Bridge",
   "description": "Native Flecs lifecycle, Script import and Unity presentation adapters.",

@@ -1,0 +1,11 @@
+{
+  "name": "Runtime.Flecs.Editor",
+  "rootNamespace": "Runtime.Flecs.Editor",
+  "references": [
+    "Runtime.Flecs"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

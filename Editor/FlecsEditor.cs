@@ -1,6 +1,6 @@
 using UnityEditor;
 
-namespace Ecaty.Flecs.Editor
+namespace Runtime.Flecs.Editor
 {
     [InitializeOnLoad]
     public static class FlecsEditor

@@ -1,6 +1,6 @@
 {
-  "name": "Ecaty.Flecs",
-  "rootNamespace": "Ecaty.Flecs",
+  "name": "Runtime.Flecs",
+  "rootNamespace": "Runtime.Flecs",
   "references": [
     "Unity.Newtonsoft.Json"
   ],

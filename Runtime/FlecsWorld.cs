@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace Ecaty.Flecs
+namespace Runtime.Flecs
 {
     [DisallowMultipleComponent]
     public sealed class FlecsWorld : MonoBehaviour
