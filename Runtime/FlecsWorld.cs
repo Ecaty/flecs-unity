@@ -60,6 +60,31 @@ namespace Runtime.Flecs
             if (objects.TryGetValue(id, out var view) && view.HasLast)
                 ApplyPose(view, view.Last);
         }
+        // A physics body must not sit under a scaled or moving parent: a detached view stays under the world root
+        // while its pose owner moves it, whatever its Flecs parent is.
+        readonly HashSet<ulong> detached = new();
+        public void SetDetached(ulong id, bool value)
+        {
+            if (value ? !detached.Add(id) : !detached.Remove(id))
+                return;
+            if (!objects.TryGetValue(id, out var view))
+                return;
+            var t = view.Root.transform;
+            if (value)
+            {
+                var position = t.position;
+                var rotation = t.rotation;
+                t.SetParent(transform, false);
+                t.SetPositionAndRotation(position, rotation);
+                return;
+            }
+            // Back under its Flecs parent; an owner that still holds the pose keeps it, otherwise Flecs' pose applies.
+            Transform parent = view.Parent != 0 && objects.TryGetValue(view.Parent, out var p) ? p.Root.transform : transform;
+            if (t.parent != parent)
+                t.SetParent(parent, false);
+            if (view.HasLast && !poseOwned.Contains(id))
+                ApplyPose(view, view.Last);
+        }
         public string Error
         {
             get; private set;
@@ -142,7 +167,7 @@ namespace Runtime.Flecs
                 {
                     waiting.Remove(entity);
                     foreach (var childId in children)
-                        if (objects.TryGetValue(childId, out var child) && child.Parent == entity && child.Root.transform.parent != created.Root.transform)
+                        if (objects.TryGetValue(childId, out var child) && child.Parent == entity && !detached.Contains(childId) && child.Root.transform.parent != created.Root.transform)
                             child.Root.transform.SetParent(created.Root.transform, false);
                 }
             }
@@ -163,7 +188,7 @@ namespace Runtime.Flecs
                 else
                     appearanceOwned.Remove(v.Entity);
                 Transform parent = transform;
-                if (v.Parent != 0)
+                if (v.Parent != 0 && !detached.Contains(v.Entity))
                 {
                     if (objects.TryGetValue(v.Parent, out var p))
                         parent = p.Root.transform;
@@ -172,7 +197,7 @@ namespace Runtime.Flecs
                 }
                 if (view.Root.transform.parent != parent)
                     view.Root.transform.SetParent(parent, false);
-                if (!poseHeld)
+                if (!poseHeld && !detached.Contains(v.Entity))
                     ApplyPose(view, v);
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
@@ -321,6 +346,7 @@ namespace Runtime.Flecs
             }
             poseOwned.Remove(id);
             appearanceOwned.Remove(id);
+            detached.Remove(id);
             DestroyOwnedObject(view.Root);
             objects.Remove(id);
         }
@@ -361,6 +387,7 @@ namespace Runtime.Flecs
         {
             poseOwned.Clear();
             appearanceOwned.Clear();
+            detached.Clear();
             if (Session != null)
             {
                 Session.Dispose();
