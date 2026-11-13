@@ -104,6 +104,15 @@ namespace Runtime.Flecs
             Check();
             return Take(fu_query_json(context, expression), true);
         }
+        /// <summary>
+        /// One-off query for tools and the AI: evaluated without a cache and without taking one of the query slots
+        /// that features read every frame. A positive <paramref name="limit"/> caps the number of rows.
+        /// </summary>
+        public string QueryOnce(string expression, int limit = 0)
+        {
+            Check();
+            return Take(fu_query_once_json(context, expression, limit), true);
+        }
         public string EntityJson(string path)
         {
             Check();
@@ -416,6 +425,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_keyboard(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, int down, int repeat, uint modifiers);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_shell_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string command);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_bridge_diagnostics(IntPtr ctx);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_query_once_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression, int limit);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_script_capture(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_script_undo(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_script_edit(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, [MarshalAs(UnmanagedType.LPUTF8Str)] string entity, [MarshalAs(UnmanagedType.LPUTF8Str)] string type, [MarshalAs(UnmanagedType.LPUTF8Str)] string expression);
