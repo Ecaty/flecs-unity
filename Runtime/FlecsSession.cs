@@ -257,6 +257,8 @@ namespace Runtime.Flecs
             if (fu_world_enter(context, world) < 0)
                 throw new InvalidOperationException("Entity " + world + " is not a world.");
         }
+        /// <summary>Goes up whenever undo, rewind, stop or load replaces a world with a new root entity: holders of a world id look it up again.</summary>
+        public int WorldGeneration { get; private set; }
         /// <summary>The world that is entered, or 0.</summary>
         public ulong EnteredWorld
         {
@@ -309,7 +311,10 @@ namespace Runtime.Flecs
             error = null;
             world = fu_world_load_json(context, id, document);
             if (world != 0)
+            {
+                WorldGeneration++;
                 return true;
+            }
             error = Utf8(fu_last_error(context));
             return false;
         }
@@ -328,7 +333,10 @@ namespace Runtime.Flecs
             error = null;
             restored = fu_world_rewind(context, world);
             if (restored != 0)
+            {
+                WorldGeneration++;
                 return true;
+            }
             error = Utf8(fu_last_error(context));
             return false;
         }
@@ -337,6 +345,12 @@ namespace Runtime.Flecs
         {
             Check();
             return Take(fu_describe_json(context, path), false);
+        }
+        /// <summary>The names of the types (components, tags, relationships) as a JSON array, in reading order.</summary>
+        public string Types()
+        {
+            Check();
+            return Take(fu_types_json(context), false);
         }
         /// <summary>Lists the kinds under a scope as JSON; scope 0 is the library.</summary>
         public string Kinds(ulong scope = 0)
@@ -390,7 +404,10 @@ namespace Runtime.Flecs
             error = null;
             restored = fu_world_undo(context, world);
             if (restored != 0)
+            {
+                WorldGeneration++;
                 return true;
+            }
             error = Utf8(fu_last_error(context));
             return false;
         }
@@ -409,7 +426,10 @@ namespace Runtime.Flecs
             error = null;
             restored = fu_world_stop(context, world);
             if (restored != 0)
+            {
+                WorldGeneration++;
                 return true;
+            }
             error = Utf8(fu_last_error(context));
             return false;
         }
@@ -969,6 +989,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_rewind(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_describe_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_kinds_json(IntPtr ctx, ulong scope);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_types_json(IntPtr ctx);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_alerts_json(IntPtr ctx, ulong scope);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_dry_run(IntPtr ctx, ulong world, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_checkpoint(IntPtr ctx, ulong world);

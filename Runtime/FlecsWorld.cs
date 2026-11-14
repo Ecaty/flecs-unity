@@ -25,6 +25,8 @@ namespace Runtime.Flecs
             get; private set;
         }
         public int ViewCount => objects.Count;
+        /// <summary>Goes up whenever a view's visual object is replaced or removed (its shape changed): presenters that hold its renderer look again.</summary>
+        public int VisualGeneration { get; private set; }
         // Ownership lives in the world as exclusive (TransformOwner, owner) / (AppearanceOwner, owner) pairs.
         // These sets only mirror it for the per-frame loop; the view stream is the authority.
         readonly HashSet<ulong> poseOwned = new();
@@ -202,6 +204,12 @@ namespace Runtime.Flecs
                 view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
                 if (view.Kind != v.Primitive)
                 {
+                    if (view.Mesh)
+                    {
+                        // Play mode destroys it only at the end of the frame: until then a lookup of "Visual" must not find it.
+                        view.Mesh.name = "Visual (replaced)";
+                        VisualGeneration++;
+                    }
                     DestroyOwnedObject(view.Mesh);
                     view.Mesh = null;
                     view.Renderer = null;

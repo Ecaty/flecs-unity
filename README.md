@@ -14,6 +14,8 @@ Sources, kinds and worlds on `FlecsSession`:
 - Kinds: `Spawn` makes an instance of a kind and `Attach` gives the parts of a scripted instance their kinds.
 - Worlds: `CreateWorld`, `DeleteWorld`, `EnterWorld` and `EnteredWorld` manage worlds. `QueryWorld`, `TryRunWorldScript` and `RunWorldScript` work inside one world.
 - Documents: `SaveWorld` writes a world as JSON and `TryLoadWorld` replaces a world with a document, all or nothing. `SnapshotWorld` and `TryRewindWorld` keep and restore a world. `PlayWorld` and `TryStopWorld` start and stop Play: the rules of a world run only while it plays, and Stop rewinds it.
+- `WorldGeneration` goes up whenever undo, rewind, stop or load replaces a world with a new root entity; anything that holds a world id or its view compares it each frame and looks the world up again by path.
+- `Describe(path)` describes one type or kind as JSON and `Types()` lists the type names in reading order, so the text a tool gives a model about the types is built from the engine's own list.
 
 `FlecsSession.ManagedScriptSource(path)` reads the active native managed source; `SetManagedScript(path, code)` creates/reloads it. Use the matching native library containing the additive `fu_managed_script_source` export. In Ecaty's pinned upstream runtime, managed Script reacts to Clock and external component inputs. The bridge presents its normal snapshot and writes Presented; it does not execute a second behavior system. See [runtime engine](https://github.com/Ecaty/Ecaty/blob/main/docs/RUNTIME-ENGINE.md).
 
