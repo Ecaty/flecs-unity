@@ -376,6 +376,12 @@ namespace Runtime.Flecs
                 throw new InvalidOperationException(Utf8(fu_last_error(context)));
             return kept;
         }
+        /// <summary>Forgets the last checkpoint without loading it: for an edit that was refused and changed nothing. False when there is none.</summary>
+        public bool DropCheckpoint(ulong world)
+        {
+            Check();
+            return fu_world_checkpoint_drop(context, world) >= 0;
+        }
         /// <summary>Loads the last checkpoint. False when there is none. Every entity of the world gets a new id; <paramref name="restored"/> is the world's new entity.</summary>
         public bool TryUndoWorld(ulong world, out ulong restored, out string error)
         {
@@ -966,6 +972,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_alerts_json(IntPtr ctx, ulong scope);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_dry_run(IntPtr ctx, ulong world, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_checkpoint(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_checkpoint_drop(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_undo(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_play(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_stop(IntPtr ctx, ulong world);
