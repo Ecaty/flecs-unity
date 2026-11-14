@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Unity.Profiling;
 using UnityEngine;
 
 namespace Runtime.Flecs
@@ -36,6 +37,8 @@ namespace Runtime.Flecs
             if (Session == null || Session.IsDisposed || !Session.Claim(id, Session.AppearanceOwner, owner))
                 return false;
             appearanceOwned.Add(id);
+            if (objects.TryGetValue(id, out var view))
+                view.ColorStale = true;
             return true;
         }
         public void ReleaseAppearance(ulong id, ulong owner)
@@ -52,6 +55,8 @@ namespace Runtime.Flecs
             if (Session == null || Session.IsDisposed || !Session.Claim(id, Session.TransformOwner, owner))
                 return false;
             poseOwned.Add(id);
+            if (objects.TryGetValue(id, out var view))
+                view.PoseStale = true;
             return true;
         }
         public void ReleasePose(ulong id, ulong owner)
@@ -71,7 +76,9 @@ namespace Runtime.Flecs
                 return;
             if (!objects.TryGetValue(id, out var view))
                 return;
-            var t = view.Root.transform;
+            var t = view.Transform;
+            // The writer of the pose changes here, so the apply loop writes it again the next time it may.
+            view.PoseStale = true;
             if (value)
             {
                 var position = t.position;
@@ -81,7 +88,7 @@ namespace Runtime.Flecs
                 return;
             }
             // Back under its Flecs parent; an owner that still holds the pose keeps it, otherwise Flecs' pose applies.
-            Transform parent = view.Parent != 0 && objects.TryGetValue(view.Parent, out var p) ? p.Root.transform : transform;
+            Transform parent = view.Parent != 0 && objects.TryGetValue(view.Parent, out var p) ? p.Transform : transform;
             if (t.parent != parent)
                 t.SetParent(parent, false);
             if (view.HasLast && !poseOwned.Contains(id))
@@ -108,6 +115,12 @@ namespace Runtime.Flecs
         private sealed class PresentedEntity
         {
             public GameObject Root, Mesh;
+            public Transform Transform;
+            // True when this class did not write the pose (or the colour) it last saw, so Unity may show something else:
+            // the next time the loop may write it, it does, whatever changed.
+            public bool PoseStale = true, ColorStale = true;
+            // Rotation as Unity reports it for the quaternion last applied; the acknowledgement uses it instead of reading back.
+            public Vector3 AppliedEuler;
             public ulong Parent;
             public FlecsSession.View Last;
             public bool HasLast;
@@ -117,6 +130,10 @@ namespace Runtime.Flecs
             public byte[] LabelBytes = Array.Empty<byte>();
             public int LabelLength = -1;
         }
+
+        private static readonly ProfilerMarker TickMarker = new ProfilerMarker("FlecsWorld.Tick");
+        private static readonly ProfilerMarker ApplyMarker = new ProfilerMarker("FlecsWorld.Apply");
+        private static readonly ProfilerMarker AcknowledgeMarker = new ProfilerMarker("FlecsWorld.Acknowledge");
 
         private void OnEnable()
         {
@@ -143,7 +160,8 @@ namespace Runtime.Flecs
         {
             if (Session == null || Session.IsDisposed)
                 return;
-            Session.Tick(Mathf.Min(Time.unscaledDeltaTime, 0.1f));
+            using (TickMarker.Auto())
+                Session.Tick(Mathf.Min(Time.unscaledDeltaTime, 0.1f));
             SyncViews();
         }
         public void SyncViews()
@@ -152,6 +170,13 @@ namespace Runtime.Flecs
                 return;
             // The spans point at native memory valid until the next ViewChanges call.
             Session.ViewChanges(out var changed, out var gone);
+            using (ApplyMarker.Auto())
+                Apply(changed, gone);
+            using (AcknowledgeMarker.Auto())
+                Acknowledge(changed);
+        }
+        private void Apply(ReadOnlySpan<FlecsSession.View> changed, ReadOnlySpan<ulong> gone)
+        {
             for (int i = 0; i < gone.Length; i++)
                 RemoveView(gone[i]);
             // First pass creates missing objects so parents exist before the second pass links and applies data.
@@ -162,24 +187,34 @@ namespace Runtime.Flecs
                     continue;
                 // Names are fetched once per new view; per-frame name strings were a steady GC source.
                 var created = new PresentedEntity { Root = new GameObject(Session.EntityName(entity)) };
-                created.Root.transform.SetParent(transform, false);
+                created.Transform = created.Root.transform;
+                created.Transform.SetParent(transform, false);
                 objects.Add(entity, created);
-                entityOfRoot.Add(created.Root.transform, entity);
+                entityOfRoot.Add(created.Transform, entity);
                 if (waiting.TryGetValue(entity, out var children))
                 {
                     waiting.Remove(entity);
                     foreach (var childId in children)
-                        if (objects.TryGetValue(childId, out var child) && child.Parent == entity && !detached.Contains(childId) && child.Root.transform.parent != created.Root.transform)
-                            child.Root.transform.SetParent(created.Root.transform, false);
+                        if (objects.TryGetValue(childId, out var child) && child.Parent == entity && !detached.Contains(childId) && child.Transform.parent != created.Transform)
+                        {
+                            child.Transform.SetParent(created.Transform, false);
+                            child.PoseStale = true;
+                        }
                 }
             }
             for (int i = 0; i < changed.Length; i++)
             {
                 ref readonly var v = ref changed[i];
                 var view = objects[v.Entity];
+                // Compare with the previous view before it is replaced: only what differs is written to Unity.
+                bool isNew = !view.HasLast;
+                bool poseChanged = isNew || PoseDiffers(view.Last, v);
+                bool scaleChanged = isNew || view.Last.Sx != v.Sx || view.Last.Sy != v.Sy || view.Last.Sz != v.Sz;
+                bool colorChanged = isNew || view.Last.R != v.R || view.Last.G != v.G || view.Last.B != v.B || view.Last.A != v.A;
                 view.Parent = v.Parent;
                 view.Last = v;
                 view.HasLast = true;
+                bool isDetached = detached.Contains(v.Entity);
                 bool poseHeld = (v.Flags & FlecsSession.ViewPoseOwned) != 0, appearanceHeld = (v.Flags & FlecsSession.ViewAppearanceOwned) != 0;
                 if (poseHeld)
                     poseOwned.Add(v.Entity);
@@ -190,20 +225,34 @@ namespace Runtime.Flecs
                 else
                     appearanceOwned.Remove(v.Entity);
                 Transform parent = transform;
-                if (v.Parent != 0 && !detached.Contains(v.Entity))
+                if (v.Parent != 0 && !isDetached)
                 {
                     if (objects.TryGetValue(v.Parent, out var p))
-                        parent = p.Root.transform;
+                        parent = p.Transform;
                     else
                         WaitFor(v.Parent, v.Entity);
                 }
-                if (view.Root.transform.parent != parent)
-                    view.Root.transform.SetParent(parent, false);
-                if (!poseHeld && !detached.Contains(v.Entity))
-                    ApplyPose(view, v);
-                view.Root.transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
+                if (view.Transform.parent != parent)
+                {
+                    view.Transform.SetParent(parent, false);
+                    view.PoseStale = true;
+                }
+                // Written only when the pose changed or this loop did not write it last time (held, detached, re-parented).
+                // So a transform that some code moved without owning the pose is no longer snapped back by an unrelated
+                // change of the same view, a colour change for example.
+                if (!poseHeld && !isDetached)
+                {
+                    if (poseChanged || view.PoseStale)
+                        ApplyPose(view, v);
+                }
+                else
+                    view.PoseStale = true;
+                if (scaleChanged)
+                    view.Transform.localScale = new Vector3(v.Sx, v.Sy, v.Sz);
+                bool rendererReplaced = false;
                 if (view.Kind != v.Primitive)
                 {
+                    rendererReplaced = true;
                     if (view.Mesh)
                     {
                         // Play mode destroys it only at the end of the frame: until then a lookup of "Visual" must not find it.
@@ -218,7 +267,7 @@ namespace Runtime.Flecs
                     {
                         view.Mesh = GameObject.CreatePrimitive(PrimitiveKinds[v.Primitive]);
                         view.Mesh.name = "Visual";
-                        view.Mesh.transform.SetParent(view.Root.transform, false);
+                        view.Mesh.transform.SetParent(view.Transform, false);
                         // This hello world is presentation only: no hidden second physics model.
                         DestroyOwnedObject(view.Mesh.GetComponent<Collider>());
                         view.Renderer = view.Mesh.GetComponent<Renderer>();
@@ -228,13 +277,18 @@ namespace Runtime.Flecs
                 }
                 var color = new Color(v.R, v.G, v.B, v.A);
                 if (!appearanceHeld)
-                    ApplyColor(view, v);
+                {
+                    if (colorChanged || rendererReplaced || view.ColorStale)
+                        ApplyColor(view, v);
+                }
+                else
+                    view.ColorStale = true;
                 if (v.HasLabel != 0)
                 {
                     if (!view.Text)
                     {
                         var text = new GameObject("Label");
-                        text.transform.SetParent(view.Root.transform, false);
+                        text.transform.SetParent(view.Transform, false);
                         view.Text = text.AddComponent<TextMesh>();
                         view.Text.anchor = TextAnchor.MiddleCenter;
                         view.Text.alignment = TextAlignment.Center;
@@ -254,6 +308,9 @@ namespace Runtime.Flecs
                     view.LabelLength = -1;
                 }
             }
+        }
+        private void Acknowledge(ReadOnlySpan<FlecsSession.View> changed)
+        {
             // Presented observes what Unity shows: changed views plus pose-owned ones, whose owners move them every frame.
             acknowledged.Clear();
             int total = changed.Length + poseOwned.Count;
@@ -265,7 +322,7 @@ namespace Runtime.Flecs
             for (int i = 0; i < changed.Length; i++)
             {
                 acknowledged.Add(changed[i].Entity);
-                acknowledgements[n++] = Observe(objects[changed[i].Entity], changed[i].Entity, changed[i].Parent);
+                acknowledgements[n++] = Acknowledgement(objects[changed[i].Entity], changed[i]);
             }
             foreach (var id in poseOwned)
                 if (objects.TryGetValue(id, out var owned) && owned.HasLast && acknowledged.Add(id))
@@ -275,10 +332,16 @@ namespace Runtime.Flecs
         }
         private void ApplyPose(PresentedEntity view, in FlecsSession.View v)
         {
-            view.Root.transform.localPosition = new Vector3(v.Px, v.Py, v.Pz);
-            view.Root.transform.localRotation = (v.Flags & FlecsSession.ViewOriented) != 0
+            var rotation = (v.Flags & FlecsSession.ViewOriented) != 0
                 ? new Quaternion(v.Qx, v.Qy, v.Qz, v.Qw) : Quaternion.Euler(v.Rx, v.Ry, v.Rz);
+            view.Transform.SetLocalPositionAndRotation(new Vector3(v.Px, v.Py, v.Pz), rotation);
+            view.AppliedEuler = rotation.eulerAngles;
+            view.PoseStale = false;
         }
+        private static bool PoseDiffers(in FlecsSession.View a, in FlecsSession.View b) =>
+            a.Px != b.Px || a.Py != b.Py || a.Pz != b.Pz || a.Rx != b.Rx || a.Ry != b.Ry || a.Rz != b.Rz
+            || a.Qx != b.Qx || a.Qy != b.Qy || a.Qz != b.Qz || a.Qw != b.Qw
+            || ((a.Flags ^ b.Flags) & FlecsSession.ViewOriented) != 0;
         private void ApplyColor(PresentedEntity view, in FlecsSession.View v)
         {
             if (!view.Renderer)
@@ -288,10 +351,44 @@ namespace Runtime.Flecs
             properties.SetColor(ColorId, color);
             properties.SetColor(BaseColorId, color);
             view.Renderer.SetPropertyBlock(properties);
+            view.ColorStale = false;
+        }
+        // What Unity shows, built from the values just applied when this loop wrote (or kept) both the pose and the colour;
+        // a view held by an owner, detached or waiting for its parent is read back instead.
+        private FlecsSession.View Acknowledgement(PresentedEntity view, in FlecsSession.View v)
+        {
+            bool parentResolved = v.Parent == 0 || objects.ContainsKey(v.Parent);
+            if (view.PoseStale || (view.Renderer && view.ColorStale) || !parentResolved || detached.Contains(v.Entity))
+                return Observe(view, v.Entity, v.Parent);
+            Color color = Color.white;
+            if (view.Renderer)
+                color = new Color(v.R, v.G, v.B, v.A);
+            else if (view.Text)
+                color = view.Text.color;
+            return new FlecsSession.View
+            {
+                Entity = v.Entity,
+                Parent = v.Parent,
+                Px = v.Px,
+                Py = v.Py,
+                Pz = v.Pz,
+                Rx = view.AppliedEuler.x,
+                Ry = view.AppliedEuler.y,
+                Rz = view.AppliedEuler.z,
+                Sx = v.Sx,
+                Sy = v.Sy,
+                Sz = v.Sz,
+                R = color.r,
+                G = color.g,
+                B = color.b,
+                A = color.a,
+                Primitive = view.Renderer ? view.Kind : -1,
+                HasLabel = view.Text ? 1 : 0
+            };
         }
         private FlecsSession.View Observe(PresentedEntity view, ulong entity, ulong parent)
         {
-            var t = view.Root.transform;
+            var t = view.Transform;
             var position = t.localPosition;
             var rotation = t.localEulerAngles;
             var scale = t.localScale;
@@ -335,7 +432,7 @@ namespace Runtime.Flecs
         {
             if (!objects.TryGetValue(id, out var view))
                 return;
-            var root = view.Root.transform;
+            var root = view.Transform;
             // Surviving child views move to the world root; Unity would destroy them with this parent.
             for (int i = root.childCount - 1; i >= 0; i--)
             {
@@ -343,6 +440,8 @@ namespace Runtime.Flecs
                 if (!entityOfRoot.TryGetValue(child, out ulong childId))
                     continue;
                 child.SetParent(transform, false);
+                if (objects.TryGetValue(childId, out var orphan))
+                    orphan.PoseStale = true;
                 WaitFor(id, childId);
             }
             entityOfRoot.Remove(root);
@@ -403,7 +502,7 @@ namespace Runtime.Flecs
             }
             // Destroy only top-level owned views; child destruction follows hierarchy.
             foreach (var view in objects.Values)
-                if (view.Root && view.Root.transform.parent == transform)
+                if (view.Root && view.Transform.parent == transform)
                     DestroyOwnedObject(view.Root);
             objects.Clear();
             entityOfRoot.Clear();
