@@ -332,6 +332,62 @@ namespace Runtime.Flecs
             error = Utf8(fu_last_error(context));
             return false;
         }
+        /// <summary>Describes a type (members, ranges, briefs) or a kind (bases, parts, instances, source) as JSON. Null when the path names nothing.</summary>
+        public string Describe(string path)
+        {
+            Check();
+            return Take(fu_describe_json(context, path), false);
+        }
+        /// <summary>Lists the kinds under a scope as JSON; scope 0 is the library.</summary>
+        public string Kinds(ulong scope = 0)
+        {
+            Check();
+            return Take(fu_kinds_json(context, scope), false);
+        }
+        /// <summary>Lists the active alerts about entities under a scope as JSON; scope 0 is everything.</summary>
+        public string Alerts(ulong scope = 0)
+        {
+            Check();
+            return Take(fu_alerts_json(context, scope), false);
+        }
+        /// <summary>Runs a script against a copy of the world and discards the copy. False with the reason and the 1-based position when the script would fail. The world is not touched.</summary>
+        public bool TryDryRunWorld(ulong world, string code, out string error, out int line, out int column)
+        {
+            Check();
+            SourcesChanged();
+            error = null;
+            line = column = 0;
+            if (fu_world_dry_run(context, world, code) == 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            if (fu_error_position(context, out int l, out int c) == 1)
+            {
+                line = l;
+                column = c;
+            }
+            return false;
+        }
+        /// <summary>Keeps the world as it is now for undo (the last 16 are kept). Returns how many are kept. Throws when the entity is not a world.</summary>
+        public int CheckpointWorld(ulong world)
+        {
+            Check();
+            int kept = fu_world_checkpoint(context, world);
+            if (kept < 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+            return kept;
+        }
+        /// <summary>Loads the last checkpoint. False when there is none. Every entity of the world gets a new id; <paramref name="restored"/> is the world's new entity.</summary>
+        public bool TryUndoWorld(ulong world, out ulong restored, out string error)
+        {
+            Check();
+            SourcesChanged();
+            error = null;
+            restored = fu_world_undo(context, world);
+            if (restored != 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
+        }
         /// <summary>Starts Play: keeps a snapshot, sets every count to its start and lets the rules of the world run. Throws when the entity is not a world.</summary>
         public void PlayWorld(ulong world)
         {
@@ -905,6 +961,12 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_load_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_snapshot(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_rewind(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_describe_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_kinds_json(IntPtr ctx, ulong scope);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern IntPtr fu_alerts_json(IntPtr ctx, ulong scope);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_dry_run(IntPtr ctx, ulong world, [MarshalAs(UnmanagedType.LPUTF8Str)] string code);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_checkpoint(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_undo(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_play(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_stop(IntPtr ctx, ulong world);
     }
