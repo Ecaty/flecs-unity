@@ -332,6 +332,25 @@ namespace Runtime.Flecs
             error = Utf8(fu_last_error(context));
             return false;
         }
+        /// <summary>Starts Play: keeps a snapshot, sets every count to its start and lets the rules of the world run. Throws when the entity is not a world.</summary>
+        public void PlayWorld(ulong world)
+        {
+            Check();
+            if (fu_world_play(context, world) < 0)
+                throw new InvalidOperationException(Utf8(fu_last_error(context)));
+        }
+        /// <summary>Stops Play: rewinds the world to its snapshot. <paramref name="restored"/> is the world entity (a new one when it was playing). False with the reason on error.</summary>
+        public bool TryStopWorld(ulong world, out ulong restored, out string error)
+        {
+            Check();
+            SourcesChanged();
+            error = null;
+            restored = fu_world_stop(context, world);
+            if (restored != 0)
+                return true;
+            error = Utf8(fu_last_error(context));
+            return false;
+        }
         public string ManagedScriptSource(string path)
         {
             Check();
@@ -876,5 +895,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_load_json(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_snapshot(IntPtr ctx, ulong world);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_rewind(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_play(IntPtr ctx, ulong world);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_stop(IntPtr ctx, ulong world);
     }
 }
