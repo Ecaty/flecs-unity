@@ -622,6 +622,15 @@ namespace Runtime.Flecs
                 throw new ArgumentException("RemoveComponent needs a live entity and type.");
             return rc == 1;
         }
+        /// <summary>Shapes a sound into <paramref name="output"/> (same length as the input): size from deeper and bigger (-1) to higher and smaller (+1), rough from smoother (-1) to rougher (+1). A pure function with no world access; safe to call from a worker thread. Returns false for bad arguments.</summary>
+        public static unsafe bool ShapeSound(float[] input, int sampleRate, float size, float rough, float[] output)
+        {
+            if (input == null || output == null || input.Length == 0 || output.Length < input.Length)
+                return false;
+            fixed (float* source = input)
+            fixed (float* target = output)
+                return fu_sound_shape(source, input.Length, sampleRate, size, rough, target, output.Length) == input.Length;
+        }
         public int DeleteEntity(string path)
         {
             Check();
@@ -884,6 +893,7 @@ namespace Runtime.Flecs
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_error_position(IntPtr ctx, out int line, out int column);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_spawn(IntPtr ctx, ulong kind, ulong parent, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_attach(IntPtr ctx, ulong entity);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern unsafe int fu_sound_shape(float* input, int count, int sampleRate, float size, float rough, float* output, int capacity);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_remove_component(IntPtr ctx, ulong entity, ulong type, ulong target);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern ulong fu_world_create(IntPtr ctx, [MarshalAs(UnmanagedType.LPUTF8Str)] string id);
         [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] private static extern int fu_world_delete(IntPtr ctx, ulong world);
